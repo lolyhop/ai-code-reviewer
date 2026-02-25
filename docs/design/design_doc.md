@@ -68,9 +68,21 @@ The average number of review comments per PR.
 
 ### 2.2 Business Value
 
-We plan to translate these engineering metrics into financial impact (FTE Savings / Cost Avoidance). This calculation will be performed by the Business Unit.
+Business value of engineering metrics
 
-> **TODO:** https://github.com/lolyhop/ai-code-reviewer/issues/1
+[source 1](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
+
+[source 2](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
+
+
+- **Time-to-Merge (Cycle Time):** 
+For a fair team takes 73-141 hours on average. A decrease by 20% would save 14.6-28.2 hours per pull request for a team.
+
+- **Change Failure Rate (CFR):** 
+For a fair team is 5-17% on average. A decrease by 5% would avoid one production failure per 115-400 pull requests (which is easily achiavable in a few months).
+
+- **Comments per Pull Request:** 
+An average team at Google has 2 comments per pull request. Decrease by 7% would save 0.14 comments per pull request or 1 comment every 350 lines of code.
 
 
 ### 2.2 Offline Metrics
