@@ -80,7 +80,7 @@ For an average team, the first-time approval rate is 80%, or 1.2 review cycles p
 For an average team, the change failure rate is 5-17%. A decrease by 5% would avoid one production failure per 115-400 pull requests (which is easily achiavable in a few months). [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
 
 - **Comments per Pull Request:** 
-An average team at Google receives 2 comments per pull request. Decrease by **7%** would save 0.14 comments per pull request or 1 comment every 350 lines of code. [Source](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
+An average team at Google receives 2 comments per pull request or 5 comments per 100 lines of code. Decrease by **7%** would save 0.14 comments per pull request or 1 comment every 285 lines of code. [Source](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
 
 
 ### 2.3 Offline Metrics
