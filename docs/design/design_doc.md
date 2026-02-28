@@ -83,7 +83,7 @@ For an average team, the change failure rate is 5-17%. A decrease by 5% would av
 An average team at Google receives 2 comments per pull request. Decrease by **7%** would save 0.14 comments per pull request or 1 comment every 350 lines of code. [Source](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
 
 
-### 2.2 Offline Metrics
+### 2.3 Offline Metrics
 
 **1. Classification Quality:**
 We prioritize **Precision** over Recall because false positives annoy developers and reduce trust in the tool.
