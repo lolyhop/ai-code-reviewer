@@ -71,13 +71,13 @@ The average number of review comments per PR.
 Senior developers spend 8-12 hours per week reviewing code ([Source](https://dev.to/sociilabs/the-40k-code-review-tax-why-manual-reviews-are-bleeding-your-engineering-budget-3485)). We expect that our product would decrease required time for code reviews by roughly **7%** or by **35-50 minutes per person weekly**. With a salary of $200k/year that translates to **$3k-4.2k/year per person in time savings alone**. On top of that it will reduce back-and-fourth between developers, allowing for significantly faster feature delivery.
 
 - **Time-to-Merge (Cycle Time):** 
-For a fair team takes 73-141 hours on average. A decrease by 20% would save 14.6-28.2 hours of waiting per pull request. [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
+For an average team, time-to-merge is 73-141 hours. A decrease by 20% would save 14.6-28.2 hours of waiting per pull request. [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
 
 - **First-Time Approval Rate:**
-For a fair team is 80% or 1.2 review cycles per pull request. By increasing first-time approval rate by 5%, multiple hours if not days of waiting can be saved for every 20th pull request. [Source](https://codeclimate.com/blog/pull-request-reviews-for-enterprise-engineering?trk=public_post_comment-text)
+For an average team, the first-time approval rate is 80%, or 1.2 review cycles per pull request. By increasing first-time approval rate by 5%, multiple hours if not days of waiting can be saved for every 20th pull request. [Source](https://codeclimate.com/blog/pull-request-reviews-for-enterprise-engineering?trk=public_post_comment-text)
 
 - **Change Failure Rate (CFR):** 
-For a fair team is 5-17% on average. A decrease by 5% would avoid one production failure per 115-400 pull requests (which is easily achiavable in a few months). [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
+For an average team, the change failure rate is 5-17%. A decrease by 5% would avoid one production failure per 115-400 pull requests (which is easily achiavable in a few months). [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
 
 - **Comments per Pull Request:** 
 An average team at Google receives 2 comments per pull request. Decrease by **7%** would save 0.14 comments per pull request or 1 comment every 350 lines of code. [Source](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
