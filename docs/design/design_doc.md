@@ -56,7 +56,7 @@ The total duration from creating a Pull Request to merging it into `main`.
 
 - **First-Time Approval Rate:** 
 The percentage of PRs that are approved by a human reviewer without requiring any changes.
-  - *Goal:* Increase by 25%, as the agent catches blocking issues *before* human review starts.
+  - *Goal:* Increase by 5%, as the agent catches blocking issues *before* human review starts.
 
 - **Change Failure Rate (CFR):** 
 The percentage of deployments causing a failure in production (e.g., hotfixes/reverts).
@@ -68,12 +68,22 @@ The average number of review comments per PR.
 
 ### 2.2 Business Value
 
-We plan to translate these engineering metrics into financial impact (FTE Savings / Cost Avoidance). This calculation will be performed by the Business Unit.
+Senior developers spend 8-12 hours per week reviewing code ([Source](https://dev.to/sociilabs/the-40k-code-review-tax-why-manual-reviews-are-bleeding-your-engineering-budget-3485)). We expect our product to decrease the required time for code reviews by roughly **7%**, or by **35-50 minutes per person weekly**. With a salary of $200k/year, that translates to **$3k-4.2k/year per person in time savings alone**. On top of that, it will reduce back-and-forth between developers, allowing for significantly faster feature delivery.
 
-> **TODO:** https://github.com/lolyhop/ai-code-reviewer/issues/1
+- **Time-to-Merge (Cycle Time):** 
+For an average team, time-to-merge is 73-141 hours. A decrease by 20% would save 14.6-28.2 hours of waiting per pull request. [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
+
+- **First-Time Approval Rate:**
+For an average team, the first-time approval rate is 80%, or 1.2 review cycles per pull request. By increasing first-time approval rate by 5%, multiple hours if not days of waiting can be saved for every 20th pull request. [Source](https://codeclimate.com/blog/pull-request-reviews-for-enterprise-engineering?trk=public_post_comment-text)
+
+- **Change Failure Rate (CFR):** 
+For an average team, the change failure rate is 5-17%. A relative 5% reduction in CFR (multiplying by 0.95, i.e., a 0.25–0.85 percentage-point drop from a 5–17% baseline) would avoid one production failure per roughly 115–400 pull requests: (1 / (0.05\*0.17) = 115) and (1 / (0.05\*0.05) = 400). [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
+
+- **Comments per Pull Request:** 
+An average team at Google receives 2 comments per pull request or 5 comments per 100 lines of code. Decrease by **7%** would save 0.14 comments per pull request or 1 comment every 285 lines of code. [Source](https://research.google/pubs/modern-code-review-a-case-study-at-google/)
 
 
-### 2.2 Offline Metrics
+### 2.3 Offline Metrics
 
 **1. Classification Quality:**
 We prioritize **Precision** over Recall because false positives annoy developers and reduce trust in the tool.
