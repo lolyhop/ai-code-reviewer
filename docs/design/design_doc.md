@@ -68,7 +68,7 @@ The average number of review comments per PR.
 
 ### 2.2 Business Value
 
-Senior developers spend 8-12 hours per week reviewing code ([Source](https://dev.to/sociilabs/the-40k-code-review-tax-why-manual-reviews-are-bleeding-your-engineering-budget-3485)). We expect that our product would decrease required time for code reviews by roughly **7%** or by **35-50 minutes per person weekly**. With a salary of $200k/year that translates to **$3k-4.2k/year per person in time savings alone**. On top of that it will reduce back-and-fourth between developers, allowing for significantly faster feature delivery.
+Senior developers spend 8-12 hours per week reviewing code ([Source](https://dev.to/sociilabs/the-40k-code-review-tax-why-manual-reviews-are-bleeding-your-engineering-budget-3485)). We expect our product to decrease the required time for code reviews by roughly **7%**, or by **35-50 minutes per person weekly**. With a salary of $200k/year, that translates to **$3k-4.2k/year per person in time savings alone**. On top of that, it will reduce back-and-forth between developers, allowing for significantly faster feature delivery.
 
 - **Time-to-Merge (Cycle Time):** 
 For an average team, time-to-merge is 73-141 hours. A decrease by 20% would save 14.6-28.2 hours of waiting per pull request. [Source](https://ru.scribd.com/document/983996371/LinearB-2026-Software-Engineering-Benchmarks-Report)
