@@ -16,11 +16,10 @@ Once our model is ready, we will compare its performance with the following mode
 
 | Model         | Parameters    | SWE-bench |
 | ------------- | ------------- | --------  |
-| SWE-Star-7B   | 7B            | 32.8%     |
-| mini-coder-4b | 4B            | 26.8%     |
-| mini-coder-1.7b | 1.7B        | 18.6%     |
-| SWE-agent-LM-7B | 7B          | 15.2%     |
-| Code_Review_Assistant_Model | 8B | ?      |
+| CodeScout-1.7B       | 1.7B | 55.46%      |
+| mini-coder-4b | 4B          | 26.8%       |
+| mini-coder-1.7b | 1.7B      | 18.6%       |
+| CodeReviewer | <1B          | ?           |
 
 All of them perform relatively well for their size. The last model isn't evaluated on SWE-bench but has a similar idea to ours.
 
@@ -28,8 +27,8 @@ All of them perform relatively well for their size. The last model isn't evaluat
 As the base model we plan to use [Qwen-3.5-2B-base](https://huggingface.co/Qwen/Qwen3.5-2B-Base). Reasons for this:
 
 1) The base Qwen-3.5 version with 397B parameters performs well on the SWE-bench verified benchmark.
-2) All of our reference models use older versions of Qwen, meaning it should perform well after fine-tuning.
-3) It's very computationally efficient. The cost of generating 1M tokens with API is about 18 times less than for Gemini.
+2) Three out of four of our reference models (from the table above) use older versions of Qwen, meaning it should perform well after fine-tuning.
+3) It achieves incredible efficiency for inferencing thanks to the usage of Hybrid Attention and Mixture of Experts.
 4) It's open-source.
 
 ## 4. Final evaluation
