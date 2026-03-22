@@ -12,37 +12,9 @@ from tqdm import tqdm
 
 from ai_code_reviewer.dataset import config
 from ai_code_reviewer.dataset.http import async_http_get_bytes, async_http_get_json
+from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_repo_rel_path(path: str) -> str | None:
-    """Return repo-relative POSIX path with '..' and '.' resolved, or None if unsafe.
-
-    Args:
-        path:
-            Raw path from GitHub or archives.
-
-    Returns:
-        Normalized path, or None if empty or outside repo root.
-    """
-    if not path or "\x00" in path:
-        return None
-    p = path.replace("\\", "/").strip()
-    while p.startswith("./"):
-        p = p[2:]
-    p = p.lstrip("/")
-    parts: list[str] = []
-    for seg in p.split("/"):
-        if seg in ("", "."):
-            continue
-        if seg == "..":
-            if not parts:
-                return None
-            parts.pop()
-        else:
-            parts.append(seg)
-    return "/".join(parts) if parts else None
 
 
 def _infer_zip_root_prefix(zf: zipfile.ZipFile) -> str | None:
@@ -333,208 +305,86 @@ async def fetch_compare_patches(
     return path_to_info, maybe_truncated
 
 
-async def enrich_dataset_with_base_and_patches(
-    dataset: MutableMapping[str, Any],
-    session: aiohttp.ClientSession,
-    semaphore: asyncio.Semaphore,
-) -> None:
-    """Attach `base_content` and `patch` to each file entry.
+_COMPARE_QUEUE_STOP = object()
+_REPO_ENRICH_QUEUE_STOP = object()
 
-    Compare runs first (parallel per snapshot). Zipball paths are chosen only for files
-    that have a non-empty patch and are not ``added`` (those use empty base text), so the
-    repository archive is not downloaded when compare yields no usable patches.
+
+async def gather_compare_patches_bounded(
+    session: aiohttp.ClientSession,
+    owner: str,
+    repo: str,
+    compare_metas: list[tuple[str, str, str]],
+    semaphore: asyncio.Semaphore,
+    headers: dict[str, str],
+) -> list[tuple[dict[str, dict[str, Any]], bool] | BaseException]:
+    """Run ``fetch_compare_patches`` for each meta with a bounded worker pool.
+
+    Uses at most ``config.GITHUB_API_CONCURRENCY`` concurrent coroutines
+    (not one task per snapshot). HTTP concurrency is still limited by ``semaphore``.
 
     Args:
-        dataset:
-            Dataset to enrich.
         session:
-            The aiohttp client session.
+            Shared aiohttp session.
+        owner:
+            Repository owner login.
+        repo:
+            Repository name.
+        compare_metas:
+            Ordered ``(pr_number, base_commit, snapshot_commit)`` tuples.
         semaphore:
             API concurrency limiter.
+        headers:
+            GitHub REST headers.
+
+    Returns:
+        One list entry per ``compare_metas`` element, in order: either result
+        ``(path_to_info, maybe_truncated)`` or ``BaseException`` if the fetch failed.
     """
-    headers = config.github_api_headers()
+    n = len(compare_metas)
+    if n == 0:
+        return []
+    results: list[tuple[dict[str, dict[str, Any]], bool] | BaseException | None] = [
+        None
+    ] * n
+    worker_count = min(n, config.GITHUB_API_CONCURRENCY)
+    work_queue: asyncio.Queue[tuple[int, tuple[str, str, str]] | object] = (
+        asyncio.Queue()
+    )
+    for i, meta in enumerate(compare_metas):
+        await work_queue.put((i, meta))
+    for _ in range(worker_count):
+        await work_queue.put(_COMPARE_QUEUE_STOP)
 
-    for repo_name in tqdm(list(dataset.keys())):
-        parts = repo_name.split("/", 1)
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            logger.warning("Invalid repo_name %r; dropping repo.", repo_name)
-            del dataset[repo_name]
-            continue
-        owner, repo = parts[0], parts[1]
-
-        for pr_number in list(dataset[repo_name].keys()):
-            pr_entry = dataset[repo_name][pr_number]
-            base_commit = pr_entry.get("base_commit")
-            if not base_commit:
-                logger.warning(
-                    "No base_commit for %s PR %s; dropping PR.",
-                    repo_name,
-                    pr_number,
+    async def _compare_worker() -> None:
+        while True:
+            item = await work_queue.get()
+            if item is _COMPARE_QUEUE_STOP:
+                break
+            idx, (pr_number, base_commit, snapshot_commit) = item
+            try:
+                results[idx] = await fetch_compare_patches(
+                    session,
+                    owner,
+                    repo,
+                    base_commit,
+                    snapshot_commit,
+                    semaphore,
+                    headers,
                 )
-                del dataset[repo_name][pr_number]
-                continue
+            except BaseException as exc:
+                results[idx] = exc
 
-        compare_metas: list[tuple[str, str, str]] = []
-        compare_tasks: list[asyncio.Task[tuple[dict[str, dict[str, Any]], bool]]] = []
-        for pr_number in list(dataset[repo_name].keys()):
-            pr_entry = dataset[repo_name][pr_number]
-            base_commit = pr_entry.get("base_commit")
-            if not base_commit:
-                continue
-            for snapshot_commit in pr_entry["commits"].keys():
-                compare_metas.append((pr_number, base_commit, snapshot_commit))
-                compare_tasks.append(
-                    asyncio.create_task(
-                        fetch_compare_patches(
-                            session,
-                            owner,
-                            repo,
-                            base_commit,
-                            snapshot_commit,
-                            semaphore,
-                            headers,
-                        )
-                    )
-                )
+    await asyncio.gather(*(_compare_worker() for _ in range(worker_count)))
+    out: list[tuple[dict[str, dict[str, Any]], bool] | BaseException] = []
+    for r in results:
+        if r is None:
+            raise RuntimeError("gather_compare_patches_bounded: missing result slot")
+        out.append(r)
+    return out
 
-        compare_results: list[
-            tuple[str, str, str, dict[str, dict[str, Any]], bool]
-        ] = []
-        if compare_tasks:
-            task_results = await asyncio.gather(*compare_tasks, return_exceptions=True)
-            for meta, result in zip(compare_metas, task_results):
-                pr_number, base_commit, snapshot_commit = meta
-                if isinstance(result, BaseException):
-                    logger.error(
-                        "Compare task failed for %s PR %s snapshot %s: %s",
-                        repo_name,
-                        pr_number,
-                        snapshot_commit[:7],
-                        result,
-                    )
-                    cmap: dict[str, dict[str, Any]] = {}
-                    trunc = False
-                else:
-                    cmap, trunc = result
-                compare_results.append(
-                    (pr_number, base_commit, snapshot_commit, cmap, trunc)
-                )
 
-        compare_cache: dict[tuple[Any, str], dict[str, dict[str, Any]]] = {}
-        for pr_number, base_commit, snapshot_commit, cmap, _trunc in compare_results:
-            compare_cache[(pr_number, snapshot_commit)] = cmap
-
-        base_to_paths: defaultdict[str, set[str]] = defaultdict(set)
-        for pr_number in list(dataset[repo_name].keys()):
-            pr_entry = dataset[repo_name][pr_number]
-            base_commit = pr_entry.get("base_commit")
-            if not base_commit:
-                continue
-            for snapshot_commit, path_map in pr_entry["commits"].items():
-                cmap = compare_cache.get((pr_number, snapshot_commit), {})
-                for path in path_map.keys():
-                    path_norm = normalize_repo_rel_path(path)
-                    if path_norm is None:
-                        continue
-                    cinfo = cmap.get(path_norm)
-                    if not cinfo or not cinfo.get("patch"):
-                        continue
-                    file_status = (cinfo.get("status") or "").lower()
-                    if file_status == "added":
-                        continue
-                    for nk in _paths_for_base_zip_lookup(path_norm, cinfo):
-                        base_to_paths[base_commit].add(nk)
-
-        base_caches: dict[str, dict[str, str | None]] = {}
-
-        async def fetch_one_base(
-            base_commit: str,
-        ) -> tuple[str, int, dict[str, str | None]]:
-            paths_needed = base_to_paths[base_commit]
-            if not paths_needed:
-                return base_commit, 200, {}
-            status, mapping = await fetch_paths_from_zipball(
-                owner,
-                repo,
-                base_commit,
-                paths_needed,
-                session,
-                semaphore,
-                headers,
-            )
-            return base_commit, status, mapping
-
-        zip_tasks = [fetch_one_base(bs) for bs in base_to_paths.keys()]
-        if zip_tasks:
-            zip_raw = await asyncio.gather(*zip_tasks, return_exceptions=True)
-            zip_results = []
-            for bs, res in zip(base_to_paths.keys(), zip_raw):
-                if isinstance(res, BaseException):
-                    logger.error(
-                        "Zipball task failed for %s @ %s: %s",
-                        repo_name,
-                        bs[:7],
-                        res,
-                    )
-                    zip_results.append((bs, 599, {}))
-                else:
-                    zip_results.append(res)
-        else:
-            zip_results = []
-
-        for base_commit, status, path_map in zip_results:
-            if status != 200:
-                logger.warning(
-                    "Zipball failed for %s @ %s: HTTP %s; dropping PRs with this base.",
-                    repo_name,
-                    base_commit[:7],
-                    status,
-                )
-                for pr_number in list(dataset[repo_name].keys()):
-                    if dataset[repo_name][pr_number].get("base_commit") == base_commit:
-                        del dataset[repo_name][pr_number]
-            else:
-                base_caches[base_commit] = path_map
-
-        for pr_number in list(dataset[repo_name].keys()):
-            pr_entry = dataset[repo_name][pr_number]
-            base_commit = pr_entry.get("base_commit")
-            if not base_commit:
-                continue
-            base_cache = base_caches.get(base_commit, {})
-
-            snapshot_commits = list(pr_entry["commits"].keys())
-
-            for snapshot_commit in snapshot_commits:
-                cmap = compare_cache.get((pr_number, snapshot_commit), {})
-                for path in list(pr_entry["commits"][snapshot_commit].keys()):
-                    file_entry = pr_entry["commits"][snapshot_commit][path]
-                    path_norm = normalize_repo_rel_path(path)
-                    if path_norm is None:
-                        del pr_entry["commits"][snapshot_commit][path]
-                        continue
-                    cinfo = cmap.get(path_norm)
-                    if not cinfo:
-                        del pr_entry["commits"][snapshot_commit][path]
-                        continue
-                    patch = cinfo.get("patch")
-                    if not patch:
-                        del pr_entry["commits"][snapshot_commit][path]
-                        continue
-                    file_status = (cinfo.get("status") or "").lower()
-                    if file_status == "added":
-                        file_entry["base_content"] = ""
-                        file_entry["patch"] = patch
-                    else:
-                        base_text = _resolve_base_text_from_cache(
-                            base_cache, path_norm, cinfo
-                        )
-                        if base_text is None:
-                            del pr_entry["commits"][snapshot_commit][path]
-                            continue
-                        file_entry["base_content"] = base_text
-                        file_entry["patch"] = patch
-
+def _prune_empty_dataset(dataset: MutableMapping[str, Any]) -> None:
+    """Remove empty commit maps, PRs, and repos after enrichment."""
     for repo_name in list(dataset.keys()):
         pr_map = dataset[repo_name]
         for pr_number in list(pr_map.keys()):
@@ -546,3 +396,238 @@ async def enrich_dataset_with_base_and_patches(
                 del pr_map[pr_number]
         if not pr_map:
             del dataset[repo_name]
+
+
+async def _enrich_one_repo(
+    dataset: MutableMapping[str, Any],
+    repo_name: str,
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    headers: dict[str, str],
+) -> None:
+    """Enrich a single top-level repo key (compare, zipball, patch fields)."""
+    parts = repo_name.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        logger.warning("Invalid repo_name %r; dropping repo.", repo_name)
+        del dataset[repo_name]
+        return
+    owner, repo = parts[0], parts[1]
+
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        base_commit = pr_entry.get("base_commit")
+        if not base_commit:
+            logger.warning(
+                "No base_commit for %s PR %s; dropping PR.",
+                repo_name,
+                pr_number,
+            )
+            del dataset[repo_name][pr_number]
+            continue
+
+    compare_metas: list[tuple[str, str, str]] = []
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        base_commit = pr_entry.get("base_commit")
+        if not base_commit:
+            continue
+        for snapshot_commit in pr_entry["commits"].keys():
+            compare_metas.append((pr_number, base_commit, snapshot_commit))
+
+    compare_results: list[tuple[str, str, str, dict[str, dict[str, Any]], bool]] = []
+    if compare_metas:
+        compare_raw = await gather_compare_patches_bounded(
+            session,
+            owner,
+            repo,
+            compare_metas,
+            semaphore,
+            headers,
+        )
+        for meta, result in zip(compare_metas, compare_raw):
+            pr_number, base_commit, snapshot_commit = meta
+            if isinstance(result, BaseException):
+                logger.error(
+                    "Compare task failed for %s PR %s snapshot %s: %s",
+                    repo_name,
+                    pr_number,
+                    snapshot_commit[:7],
+                    result,
+                )
+                cmap: dict[str, dict[str, Any]] = {}
+                trunc = False
+            else:
+                cmap, trunc = result
+            compare_results.append(
+                (pr_number, base_commit, snapshot_commit, cmap, trunc)
+            )
+
+    compare_cache: dict[tuple[Any, str], dict[str, dict[str, Any]]] = {}
+    for pr_number, base_commit, snapshot_commit, cmap, _trunc in compare_results:
+        compare_cache[(pr_number, snapshot_commit)] = cmap
+
+    base_to_paths: defaultdict[str, set[str]] = defaultdict(set)
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        base_commit = pr_entry.get("base_commit")
+        if not base_commit:
+            continue
+        for snapshot_commit, path_map in pr_entry["commits"].items():
+            cmap = compare_cache.get((pr_number, snapshot_commit), {})
+            for path in path_map.keys():
+                path_norm = normalize_repo_rel_path(path)
+                if path_norm is None:
+                    continue
+                cinfo = cmap.get(path_norm)
+                if not cinfo or not cinfo.get("patch"):
+                    continue
+                file_status = (cinfo.get("status") or "").lower()
+                if file_status == "added":
+                    continue
+                for nk in _paths_for_base_zip_lookup(path_norm, cinfo):
+                    base_to_paths[base_commit].add(nk)
+
+    base_caches: dict[str, dict[str, str | None]] = {}
+
+    async def fetch_one_base(
+        base_commit: str,
+    ) -> tuple[str, int, dict[str, str | None]]:
+        paths_needed = base_to_paths[base_commit]
+        if not paths_needed:
+            return base_commit, 200, {}
+        status, mapping = await fetch_paths_from_zipball(
+            owner,
+            repo,
+            base_commit,
+            paths_needed,
+            session,
+            semaphore,
+            headers,
+        )
+        return base_commit, status, mapping
+
+    zip_tasks = [fetch_one_base(bs) for bs in base_to_paths.keys()]
+    zip_results: list[tuple[str, int, dict[str, str | None]]] = []
+    if zip_tasks:
+        zip_raw = await asyncio.gather(*zip_tasks, return_exceptions=True)
+        for bs, res in zip(base_to_paths.keys(), zip_raw):
+            if isinstance(res, BaseException):
+                logger.error(
+                    "Zipball task failed for %s @ %s: %s",
+                    repo_name,
+                    bs[:7],
+                    res,
+                )
+                zip_results.append((bs, 599, {}))
+            else:
+                zip_results.append(res)
+
+    for base_commit, status, path_map in zip_results:
+        if status != 200:
+            logger.warning(
+                "Zipball failed for %s @ %s: HTTP %s; dropping PRs with this base.",
+                repo_name,
+                base_commit[:7],
+                status,
+            )
+            for pr_number in list(dataset[repo_name].keys()):
+                if dataset[repo_name][pr_number].get("base_commit") == base_commit:
+                    del dataset[repo_name][pr_number]
+        else:
+            base_caches[base_commit] = path_map
+
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        base_commit = pr_entry.get("base_commit")
+        if not base_commit:
+            continue
+        base_cache = base_caches.get(base_commit, {})
+
+        snapshot_commits = list(pr_entry["commits"].keys())
+
+        for snapshot_commit in snapshot_commits:
+            cmap = compare_cache.get((pr_number, snapshot_commit), {})
+            for path in list(pr_entry["commits"][snapshot_commit].keys()):
+                file_entry = pr_entry["commits"][snapshot_commit][path]
+                path_norm = normalize_repo_rel_path(path)
+                if path_norm is None:
+                    del pr_entry["commits"][snapshot_commit][path]
+                    continue
+                cinfo = cmap.get(path_norm)
+                if not cinfo:
+                    del pr_entry["commits"][snapshot_commit][path]
+                    continue
+                patch = cinfo.get("patch")
+                if not patch:
+                    del pr_entry["commits"][snapshot_commit][path]
+                    continue
+                file_status = (cinfo.get("status") or "").lower()
+                if file_status == "added":
+                    file_entry["base_content"] = ""
+                    file_entry["patch"] = patch
+                else:
+                    base_text = _resolve_base_text_from_cache(
+                        base_cache, path_norm, cinfo
+                    )
+                    if base_text is None:
+                        del pr_entry["commits"][snapshot_commit][path]
+                        continue
+                    file_entry["base_content"] = base_text
+                    file_entry["patch"] = patch
+
+
+async def enrich_dataset_with_base_and_patches(
+    dataset: MutableMapping[str, Any],
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """Attach `base_content` and `patch` to each file entry.
+
+    Compare runs first (parallel per snapshot). Zipball paths are chosen only for files
+    that have a non-empty patch and are not ``added`` (those use empty base text), so the
+    repository archive is not downloaded when compare yields no usable patches.
+    Failures in one repository are logged and do not stop enrichment of other repos.
+    At most ``config.GITHUB_API_CONCURRENCY`` coroutines process repositories at a time;
+    HTTP parallelism remains limited by ``semaphore``.
+
+    Args:
+        dataset:
+            Dataset to enrich.
+        session:
+            The aiohttp client session.
+        semaphore:
+            API concurrency limiter.
+    """
+    headers = config.github_api_headers()
+    repo_names = list(dataset.keys())
+    if not repo_names:
+        _prune_empty_dataset(dataset)
+        return
+
+    worker_count = min(len(repo_names), config.GITHUB_API_CONCURRENCY)
+    work_queue: asyncio.Queue[str | object] = asyncio.Queue()
+    for name in repo_names:
+        await work_queue.put(name)
+    for _ in range(worker_count):
+        await work_queue.put(_REPO_ENRICH_QUEUE_STOP)
+
+    pbar = tqdm(total=len(repo_names), desc="Enriching repos")
+
+    async def _repo_worker() -> None:
+        while True:
+            item = await work_queue.get()
+            if item is _REPO_ENRICH_QUEUE_STOP:
+                break
+            name = item
+            try:
+                await _enrich_one_repo(dataset, name, session, semaphore, headers)
+            except Exception as exc:
+                logger.error("Repo enrichment failed for %s: %s", name, exc)
+            finally:
+                pbar.update(1)
+
+    try:
+        await asyncio.gather(*(_repo_worker() for _ in range(worker_count)))
+    finally:
+        pbar.close()
+    _prune_empty_dataset(dataset)

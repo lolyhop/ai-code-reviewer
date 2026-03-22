@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from ai_code_reviewer.dataset import config
 from ai_code_reviewer.dataset.http import async_http_get_bytes
+from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
 logger = logging.getLogger(__name__)
 
@@ -90,34 +91,20 @@ def get_hunk_context_bounds(diff_hunk: str) -> tuple[int | None, int | None]:
     return context_start_line, context_end_line
 
 
-async def fetch_pr_comments_for_hour(
-    session: aiohttp.ClientSession,
-    date_hour: datetime,
-    semaphore: asyncio.Semaphore,
-) -> MutableMapping[str, Any]:
-    """Fetches and filters GitHub archive Pull Request comments for a specific date and hour.
+def parse_gh_archive_hour_bytes(compressed_data: bytes) -> MutableMapping[str, Any]:
+    """Decompress GH Archive ``.json.gz`` bytes and build a partial dataset tree.
+
+    Runs synchronously; callers should offload with ``asyncio.to_thread`` from async code.
 
     Args:
-        session:
-            The aiohttp client session.
-        date_hour:
-            The datetime object representing the date and hour.
-        semaphore:
-            The semaphore for rate limiting.
+        compressed_data:
+            Raw gzip-compressed NDJSON body.
 
     Returns:
-        A dictionary containing the dataset.
+        Nested dataset mapping for this hour (same shape as ``make_dataset()``).
     """
-    url = f"{config.GH_ARCHIVE_API_BASE}/{date_hour.strftime('%Y-%m-%d-%-H')}.json.gz"
     dataset = make_dataset()
-
     try:
-        status, compressed_data = await async_http_get_bytes(
-            session, url, semaphore=semaphore
-        )
-        if status != 200:
-            return dataset
-
         with gzip.GzipFile(fileobj=io.BytesIO(compressed_data)) as gz:
             for line in gz:
                 try:
@@ -187,18 +174,61 @@ async def fetch_pr_comments_for_hour(
                     if head_start_line is None or head_end_line is None:
                         continue
 
-                    file_entry = pr_entry["commits"][snapshot_commit][path]
-                    file_entry["comments"].append(
-                        {
-                            "body": body,
-                            "diff_hunk": diff_hunk,
-                            "head_start_line": head_start_line,
-                            "head_end_line": head_end_line,
-                            "comment_id": comment.get("id"),
-                        }
-                    )
+                    path_norm = normalize_repo_rel_path(path)
+                    if path_norm is None or not path_norm.endswith(".py"):
+                        continue
+
+                    comment_record: dict[str, Any] = {
+                        "body": body,
+                        "diff_hunk": diff_hunk,
+                        "head_start_line": head_start_line,
+                        "head_end_line": head_end_line,
+                        "comment_id": comment.get("id"),
+                    }
+                    path_map = pr_entry["commits"][snapshot_commit]
+                    try:
+                        path_map[path_norm]["comments"].append(comment_record)
+                    except Exception:
+                        fe = path_map.get(path_norm)
+                        if fe is not None and not fe.get("comments"):
+                            del path_map[path_norm]
+                        raise
                 except Exception as e:
                     logger.warning("Skipping comment due to error: %s", e)
+    except Exception as e:
+        logger.error("Error parsing GH Archive hour payload: %s", e)
+    return dataset
+
+
+async def fetch_pr_comments_for_hour(
+    session: aiohttp.ClientSession,
+    date_hour: datetime,
+    semaphore: asyncio.Semaphore,
+) -> MutableMapping[str, Any]:
+    """Fetches and filters GitHub archive Pull Request comments for a specific date and hour.
+
+    Args:
+        session:
+            The aiohttp client session.
+        date_hour:
+            The datetime object representing the date and hour.
+        semaphore:
+            The semaphore for rate limiting.
+
+    Returns:
+        A dictionary containing the dataset.
+    """
+    url = f"{config.GH_ARCHIVE_API_BASE}/{date_hour.strftime('%Y-%m-%d-%-H')}.json.gz"
+    dataset = make_dataset()
+
+    try:
+        status, compressed_data = await async_http_get_bytes(
+            session, url, semaphore=semaphore
+        )
+        if status != 200:
+            return dataset
+
+        return await asyncio.to_thread(parse_gh_archive_hour_bytes, compressed_data)
     except Exception as e:
         logger.error("Error fetching %s: %s", url, e)
     return dataset
@@ -212,7 +242,8 @@ def merge_datasets(
 
     For each repo, PR, commit, and path, appends comments from `source`,
     skipping comments whose `comment_id` already exists in `target` for
-    that same file and commit snapshot.
+    that same file and commit snapshot. Path keys are normalized with
+    ``normalize_repo_rel_path`` so equivalent raw paths merge into one entry.
 
     `base_commit` is taken from `source` only when `target` has no
     `base_commit` yet (first merged hour wins).
@@ -230,7 +261,16 @@ def merge_datasets(
                 tgt_pr["base_commit"] = pr_entry["base_commit"]
             for commit_commit, path_map in pr_entry["commits"].items():
                 for path, file_entry in path_map.items():
-                    tgt_file = tgt_pr["commits"][commit_commit][path]
+                    path_norm = normalize_repo_rel_path(path)
+                    if path_norm is None:
+                        logger.warning(
+                            "Skipping merge for unsafe path key %r in %s PR %s",
+                            path,
+                            repo_name,
+                            pr_number,
+                        )
+                        continue
+                    tgt_file = tgt_pr["commits"][commit_commit][path_norm]
                     existing_ids = {
                         c["comment_id"]
                         for c in tgt_file["comments"]
@@ -256,6 +296,8 @@ async def fetch_pr_comments_range(
     `start` and `end` are normalized to hour boundaries. All hours in the inclusive range
     `[start_hour, end_hour]` are fetched in parallel, then merged into one dataset.
     Duplicate comments (same `comment_id` on the same file/commit) are kept once.
+    Hour processing uses at most ``config.GH_ARCHIVE_CONCURRENCY`` worker coroutines;
+    concurrent HTTP remains limited by the passed semaphore (``GH_ARCHIVE_CONCURRENCY``).
 
     Args:
         session:
@@ -286,17 +328,40 @@ async def fetch_pr_comments_range(
         hours.append(cur)
         cur += timedelta(hours=1)
 
-    tasks = [fetch_pr_comments_for_hour(session, h, semaphore) for h in hours]
-    hourly: list[MutableMapping[str, Any]] = []
+    n = len(hours)
+    if n == 0:
+        return make_dataset()
 
-    with tqdm(total=len(tasks), desc="Fetching hourly data") as pbar:
-        for coro in asyncio.as_completed(tasks):
-            result = await coro
-            hourly.append(result)
-            pbar.update(1)
+    worker_count = min(n, config.GH_ARCHIVE_CONCURRENCY)
+    results: list[MutableMapping[str, Any]] = [make_dataset() for _ in range(n)]
+    work_queue: asyncio.Queue[tuple[int, datetime] | None] = asyncio.Queue()
+    for i, hour in enumerate(hours):
+        await work_queue.put((i, hour))
+    for _ in range(worker_count):
+        await work_queue.put(None)
+
+    async def _hour_worker(pbar: tqdm) -> None:
+        while True:
+            item = await work_queue.get()
+            if item is None:
+                break
+            idx, hour = item
+            try:
+                results[idx] = await fetch_pr_comments_for_hour(
+                    session, hour, semaphore
+                )
+            except Exception as exc:
+                logger.error("Hour fetch failed for %s: %s", hour, exc)
+            finally:
+                pbar.update(1)
+
+    with tqdm(total=n, desc="Fetching hourly data") as pbar:
+        await asyncio.gather(
+            *(_hour_worker(pbar) for _ in range(worker_count)),
+        )
 
     merged = make_dataset()
-    for part in hourly:
+    for part in results:
         merge_datasets(merged, part)
     return merged
 
@@ -317,6 +382,8 @@ def filter_dataset_by_top_snapshot_commits(
 
     PRs with no kept commits are omitted, as are repos with no PRs left. If
     `snapshot_commits_to_keep` is 0, returns an empty `make_dataset()` tree.
+
+    Paths with no comments are skipped (defensive; ingestion uses normalized keys).
 
     Args:
         dataset:
@@ -358,6 +425,8 @@ def filter_dataset_by_top_snapshot_commits(
                     tgt_pr = out[repo_name][pr_number]
                     tgt_pr["base_commit"] = pr_entry.get("base_commit")
                 for path, file_entry in path_map.items():
+                    if len(file_entry.get("comments", [])) == 0:
+                        continue
                     out_entry: dict[str, Any] = {
                         "comments": list(file_entry["comments"])
                     }
@@ -366,3 +435,29 @@ def filter_dataset_by_top_snapshot_commits(
                             out_entry[key] = file_entry[key]
                     tgt_pr["commits"][commit][path] = out_entry
     return out
+
+
+def prune_files_without_comments(dataset: MutableMapping[str, Any]) -> None:
+    """Remove file entries whose ``comments`` list is empty (e.g. legacy checkpoints).
+
+    Drops empty path maps, then empty commits, PRs, and repos. Mutates ``dataset`` in place.
+
+    Args:
+        dataset:
+            Nested mapping from ``make_dataset()`` or JSON round-trip.
+    """
+    for repo_name in list(dataset.keys()):
+        pr_map = dataset[repo_name]
+        for pr_number in list(pr_map.keys()):
+            commits = pr_map[pr_number]["commits"]
+            for snap in list(commits.keys()):
+                path_map = commits[snap]
+                for path in list(path_map.keys()):
+                    if len(path_map[path].get("comments", [])) == 0:
+                        del path_map[path]
+                if not commits[snap]:
+                    del commits[snap]
+            if not pr_map[pr_number]["commits"]:
+                del pr_map[pr_number]
+        if not dataset[repo_name]:
+            del dataset[repo_name]
