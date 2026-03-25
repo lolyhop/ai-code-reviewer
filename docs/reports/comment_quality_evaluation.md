@@ -42,7 +42,9 @@ Given a reference human comment $x$ and a generated candidate comment $\hat{x}$:
 
 Before computing similarities, all token embeddings are **L2-normalized** (unit vectors). This reduces the dot product to cosine similarity:
 
-$$\text{sim}(\mathbf{x}_i, \mathbf{\hat{x}}_j) = \frac{\mathbf{x}_i^\top \mathbf{\hat{x}}_j}{\|\mathbf{x}_i\| \|\mathbf{\hat{x}}_j\|}$$
+$$
+\text{sim}(\mathbf{x}_i, \mathbf{\hat{x}}_j) = \frac{\mathbf{x}_i^\top \mathbf{\hat{x}}_j}{\|\mathbf{x}_i\| \|\mathbf{\hat{x}}_j\|}
+$$
 
 We compute this for every possible token pair, producing a similarity matrix
 that feeds into the greedy matching step below.
@@ -50,16 +52,23 @@ that feeds into the greedy matching step below.
 ### 3.3 Greedy Matching (Precision, Recall, F1)
 Instead of matching words exactly, BERTScore uses greedy matching in the embedding space:
 
-*   **Precision ($P_{BERT}$):** For every token in the *generated* comment, find the most semantically similar token in the *reference*.
-    $$ P_{BERT} = \frac{1}{|\hat{x}|} \sum_{\hat{x}_j \in \hat{x}} \max_{x_i \in x} \mathbf{x}_i^\top \mathbf{\hat{x}}_j $$
-    *Interpretation:* Penalizes the model if it hallucinates concepts not present in the human reference.
+*   **Precision ($P_{BERT}$):** For every token in the *generated* comment, find the most semantically similar token in the *reference*. It penalizes the model if it hallucinates concepts not present in the human reference.
 
-*   **Recall ($R_{BERT}$):** For every token in the *reference*, find the most similar token in the *generated* comment.
-    $$ R_{BERT} = \frac{1}{|x|} \sum_{x_i \in x} \max_{\hat{x}_j \in \hat{x}} \mathbf{x}_i^\top \mathbf{\hat{x}}_j $$
-    *Interpretation:* Penalizes the model if it fails to address a critical point made by the human.
+$$
+    P_{BERT} = \frac{1}{|\hat{x}|} \sum_{\hat{x}_j \in \hat{x}} \max_{x_i \in x} \mathbf{x}_i^\top \mathbf{\hat{x}}_j
+$$
+
+*   **Recall ($R_{BERT}$):** For every token in the *reference*, find the most similar token in the *generated* comment. It penalizes the model if it fails to address a critical point made by the human.
+
+$$
+    R_{BERT} = \frac{1}{|x|} \sum_{x_i \in x} \max_{\hat{x}_j \in \hat{x}} \mathbf{x}_i^\top \mathbf{\hat{x}}_j
+$$
 
 *   **F1 Score ($F_{BERT}$):** The harmonic mean of P and R. This serves as our primary evaluation metric.
-    $$ F1_{BERT} = \frac{2 \times P_{BERT} \times R_{BERT}}{P_{BERT} + R_{BERT}}$$
+
+$$
+    F1_{BERT} = \frac{2 \times P_{BERT} \times R_{BERT}}{P_{BERT} + R_{BERT}}
+$$
 
 #### Worked Example
 
