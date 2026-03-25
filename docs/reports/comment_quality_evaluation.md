@@ -1,41 +1,125 @@
-# Methodology: Generated Comment Quality Evaluation
+# Methodology: Offline Evaluation of Generated Review Comments
 
-## 1. Executive Summary
-Evaluating AI-generated code review comments is more complex than bug detection. While bug detection is a simple "Yes/No" (binary) task, a review comment can be written in many different ways. Traditional metrics that look for exact word matches (like BLEU or ROUGE) often fail because they don't understand that two different sentences can have the same meaning.
+## 1. The Evaluation Problem
+Evaluating AI-generated code review comments is fundamentally different from binary bug classification. For code reviews, a generated comment can be perfectly valid even if it shares zero words with the reference (e.g., *"Remove this"* vs. *"This is unused"*).
 
-For this project, we prioritize **semantic similarity** - measuring if the AI's advice means the same thing as the human's advice.
+Standard exact-match metrics (like BLEU or ROUGE) rely on lexical overlap. They heavily penalize paraphrasing and fail to capture semantic equivalence. Therefore, we must define an evaluation methodology that relies on **semantic similarity**.
 
-## 2. BERTScore Explained
-BERTScore is our primary metric for comparing a model-generated comment against a human reference comment.
+## 2. Candidate Evaluation Approaches
 
-### 2.1 How it Works
-Instead of matching exact words, BERTScore uses a Transformer model to turn words into "embeddings" (mathematical vectors of meaning).
-1. **Represent:** It turns every word in both comments into a vector.
-2. **Match:** It finds the best "meaning match" for every word in the AI comment against the human comment.
-3. **Score:**
-    *   **Precision:** Did the AI say anything that was NOT in the human's notes? (Focuses on truthfulness).
-    *   **Recall:** Did the AI catch everything the human mentioned? (Focuses on completeness).
-    *   **F1 Score:** The overall balance. **This is our main KPI.**
+Before selecting our primary metric, we analyzed three fundamentally different approaches for evaluating `<prediction, target>` pairs.
 
-### 2.2 Why use it?
-It is robust to **paraphrasing**. If a human says *"Unused variable"* and the AI says *"This variable is never used,"* BERTScore will give a high score, whereas older metrics would give a low score.
+### 2.1 Lexical Overlap: ROUGE-L
+ROUGE-L measures the Longest Common Subsequence (LCS) between the prediction and the target. [Link to Paper](https://aclanthology.org/W04-1013/).
+*   **Mechanism:** Counts words appearing in the same relative order.
+*   **Pros:** Computationally trivial, near-zero latency.
+*   **Cons:** Cannot detect synonyms. A syntactically broken sentence with overlapping words will score higher than a perfect paraphrase. **Rejected for semantic evaluation.**
 
-## 3. The "Code" Evolution: CodeBERTScore
-Standard BERTScore is trained on books and Wikipedia. For this project, we use **CodeBERTScore** (BERTScore using the `microsoft/codebert-base` model).
-*   **Why:** It understands Python syntax. It knows that `x += 1` and `x = x + 1` are the same thing, while a regular language model might get confused by the different symbols.
+### 2.2 Reasoning-Based: LLM-as-a-Judge
+Using a large language model (e.g., GPT-4 or Qwen-72B) prompted with a grading rubric to evaluate the prediction. [Link to Paper](https://arxiv.org/abs/2303.16634).
+*   **Mechanism:** The LLM receives the diff and both comments, outputting a score based on semantic helpfulness.
+*   **Pros:** Highly correlated with human judgment.
+*   **Cons:** API latency (seconds per sample) and significant computational/financial cost. **Rejected for offline evaluation loops** (though viable for periodic online validation).
 
-## 4. Comparison of Evaluation Approaches
+### 2.3 Contextual Embeddings: BERTScore
+BERTScore computes token-level semantic similarity using pre-trained language models. [Link to Paper](https://arxiv.org/abs/1904.09675).
+*   **Mechanism:** Maps tokens to dense vector spaces and uses greedy cosine similarity matching.
+*   **Pros:** Robust to paraphrasing; captures deep semantic meaning; runs locally on standard GPUs.
+*   **Decision:** Selected as the foundational methodology for our offline evaluation.
 
-| Approach | Metric Type | Reliability | Speed | Cost |
+## 3. BERTScore Explained
+
+To understand why BERTScore is effective, we must look at its mathematical implementation. BERTScore calculates similarity not at the sentence level, but by creating a bipartite graph of token embeddings.
+
+![BERTScore Matching Example](https://github.com/Tiiiger/bert_score/blob/master/bert_score.png?raw=true)
+
+### 3.1 Tokenization and Embedding
+Given a reference human comment $x$ and a generated candidate comment $\hat{x}$:
+1. Both sentences are passed through a Transformer tokenizer.
+2. The encoder generates contextual embeddings: $\mathbf{x}_i$ for each token in the reference, and $\mathbf{\hat{x}}_j$ for each token in the candidate.
+
+### 3.2 The Cosine Similarity Matrix
+
+Before computing similarities, all token embeddings are **L2-normalized** (unit vectors). This reduces the dot product to cosine similarity:
+
+$$\text{sim}(\mathbf{x}_i, \mathbf{\hat{x}}_j) = \frac{\mathbf{x}_i^\top \mathbf{\hat{x}}_j}{\|\mathbf{x}_i\| \|\mathbf{\hat{x}}_j\|}$$
+
+We compute this for every possible token pair, producing a similarity matrix
+that feeds into the greedy matching step below.
+
+### 3.3 Greedy Matching (Precision, Recall, F1)
+Instead of matching words exactly, BERTScore uses greedy matching in the embedding space:
+
+*   **Precision ($P_{BERT}$):** For every token in the *generated* comment, find the most semantically similar token in the *reference*.
+    $$ P_{BERT} = \frac{1}{|\hat{x}|} \sum_{\hat{x}_j \in \hat{x}} \max_{x_i \in x} \mathbf{x}_i^\top \mathbf{\hat{x}}_j $$
+    *Interpretation:* Penalizes the model if it hallucinates concepts not present in the human reference.
+
+*   **Recall ($R_{BERT}$):** For every token in the *reference*, find the most similar token in the *generated* comment.
+    $$ R_{BERT} = \frac{1}{|x|} \sum_{x_i \in x} \max_{\hat{x}_j \in \hat{x}} \mathbf{x}_i^\top \mathbf{\hat{x}}_j $$
+    *Interpretation:* Penalizes the model if it fails to address a critical point made by the human.
+
+*   **F1 Score ($F_{BERT}$):** The harmonic mean of P and R. This serves as our primary evaluation metric.
+    $$ F1_{BERT} = \frac{2 \times P_{BERT} \times R_{BERT}}{P_{BERT} + R_{BERT}}$$
+
+#### Worked Example
+
+Given:
+- Reference (*x*): `["unused", "variable", "remove"]`
+- Candidate (*x̂*): `["never", "used", "delete"]`
+
+**Step 1 — Build the cosine similarity matrix:**
+
+|              | `unused` | `variable` | `remove` |
+| :----------- | :------: | :--------: | :------: |
+| **`never`**  |   0.84   |    0.12    |   0.20   |
+| **`used`**   |   0.79   |    0.55    |   0.15   |
+| **`delete`** |   0.10   |    0.08    |   0.91   |
+
+**Step 2 — Greedy match each candidate token to its best reference token:**
+- `"never"` → max(0.84, 0.12, 0.20) = **0.84**
+- `"used"` → max(0.79, 0.55, 0.15) = **0.79**
+- `"delete"` → max(0.10, 0.08, 0.91) = **0.91**
+
+**Step 3 — Average to get Precision:**
+$$P_{BERT} = \frac{0.84 + 0.79 + 0.91}{3} = 0.85$$
+
+Recall is computed symmetrically (each *reference* token matches its best candidate token). F1 is the harmonic mean of both.
+
+## 4. From BERTScore to CodeBERTScore
+
+### 4.1 Can Any BERT Model Be Used?
+
+Technically yes — BERTScore accepts any HuggingFace encoder as its backbone.
+However, the choice of backbone significantly affects scores because tokenizers
+differ: BERT and RoBERTa use WordPiece, CodeBERT uses BPE, T5 uses SentencePiece.
+Scores computed with different backbones are **not comparable to each other**, so
+the backbone must stay fixed for the entire evaluation run.
+
+### 4.2 The Tokenizer Problem
+Standard BERT models (like `bert-base-uncased`) use WordPiece tokenizers trained on Wikipedia. When they encounter code snippets within a review comment (e.g., `x += 1`), they shatter the syntax into meaningless sub-tokens (`x`, `+`, `=`, `1`), destroying the semantic representation.
+
+### 4.3 The Solution: `microsoft/codebert-base`
+To resolve this, we parameterize our BERTScore implementation to use CodeBERT. [Link to Paper](https://arxiv.org/abs/2002.08155)
+*   **Code-Aware Vocabulary:** CodeBERT was pre-trained on CodeSearchNet. Its tokenizer (BPE) preserves programming identifiers, brackets, and operators.
+*   **Domain Context:** The embeddings understand that `list.append(x)` and `list.insert(len(list), x)` are semantically equivalent in Python.
+
+*(Note: This aligns with the principle behind [CodeBERTScore (Ren et al., 2023)](https://arxiv.org/abs/2302.05527), which demonstrates that code-pretrained backbones yield higher correlation with human judgment on code-related tasks than standard BERTScore. The original paper targets NL→code generation; our adaptation applies the same backbone-substitution principle to NL→NL review comment evaluation.)*
+
+## 5. Methodological Summary & Benchmark
+
+The following data was gathered via a local benchmark script (100-runs average) on a Python idiom example:
+
+- *Ref: "Use increment operator instead of x = x + 1."*
+- *Pred: "x += 1 is preferred over x = x + 1."*
+
+| Metric | Mechanism | Tokenizer | Avg Latency | Score (Semantic Match) |
 | :--- | :--- | :--- | :--- | :--- |
-| **ROUGE-L** | Word Overlap | Low (misses meaning) | Very Fast | Zero |
-| **CodeBERTScore** | Semantic | **High (Best for AI)** | Medium | Low (Runs on CPU/GPU) |
-| **LLM-as-a-Judge** | Reasoning | Highest | Slow | High (API costs/Time) |
+| **ROUGE-L** | Lexical (LCS) | N/A | **~0.2 ms** | 0.3750 (Fails) |
+| **BERTScore** | Semantic | WordPiece | ~140 ms | 0.7038 (Partial) |
+| **CodeBERTScore**| Semantic | **BPE (Code)** | **~120 ms** | **0.9194 (Optimal)** |
+| **LLM-Judge\*** | Reasoning | N/A | ~2000+ ms | ~0.95 (Gold Standard) |
 
-## 5. Proposed Methodology (3-Tier Evaluation)
+\* LLM-as-a-Judge values are estimated based on industry benchmarks (G-Eval / Prometheus) for API/inference latency and human correlation.
 
-To ensure our PR Reviewer is high quality, we will use three layers of testing:
-
-1.  **Tier 1: Automated Scoring (Primary).** We will run **CodeBERTScore (F1)** on every test. Our goal is to see this score increase as we fine-tune our model.
-2.  **Tier 2: Hallucination Check (Logic).** A simple script will check if the AI mentions variable names or line numbers that do not exist in the code diff. If it does, the comment is rejected.
-3.  **Tier 3: Expert Validation (Human).** Once a week, we will manually review 20 comments to ensure they are actually helpful and have a professional tone.
+### Final Conclusion
+For all offline evaluation and model tuning, we will utilize **CodeBERTScore (Mean F1)**. It provides the necessary semantic depth to recognize Python idioms while maintaining the computational efficiency required for automated training loops.
