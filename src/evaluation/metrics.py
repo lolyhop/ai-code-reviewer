@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 
 import torch
-from bert_score import score as bertscore_score
+from bert_score import BERTScorer
 
 
 @dataclass
@@ -39,7 +39,6 @@ class CommentEvaluator:
         num_layers: Optional[int] = 12,
         batch_size: int = 16,
         device: Optional[str] = None,
-        verbose: bool = False,
         idf: bool = False,
         lang: Optional[str] = None,
     ) -> None:
@@ -58,21 +57,20 @@ class CommentEvaluator:
         device:
             PyTorch device string (e.g., "cuda", "cuda:0", "cpu"). If None,
             `bert_score` chooses automatically.
-        verbose:
-            Whether to print progress from `bert_score`.
         idf:
             Whether to use IDF weighting in BERTScore.
         lang:
             Optional language code for some `bert_score` optimizations.
             For code/mixed comments, this can be left as None.
         """
-        self.model_type = model_type
-        self.num_layers = num_layers
-        self.batch_size = batch_size
-        self.device = device
-        self.verbose = verbose
-        self.idf = idf
-        self.lang = lang
+        self.scorer = BERTScorer(
+            model_type=model_type,
+            num_layers=num_layers,
+            batch_size=batch_size,
+            device=device,
+            idf=idf,
+            lang=lang
+        )
 
     def evaluate(
         self,
@@ -109,16 +107,9 @@ class CommentEvaluator:
         if len(references) == 0:
             raise ValueError("references and candidates must be non-empty.")
 
-        P, R, F1 = bertscore_score(
+        P, R, F1 = self.scorer.score(
             cands=list(candidates),
-            refs=list(references),
-            model_type=self.model_type,
-            num_layers=self.num_layers,
-            batch_size=self.batch_size,
-            device=self.device,
-            verbose=self.verbose,
-            idf=self.idf,
-            lang=self.lang,
+            refs=list(references)
         )
 
         mean_precision: float = float(P.mean().item())
@@ -165,7 +156,6 @@ if __name__ == "__main__":
         model_type="microsoft/codebert-base",
         num_layers=12,
         batch_size=8,
-        verbose=True,
     )
 
     metrics = evaluator.evaluate_to_dict(
