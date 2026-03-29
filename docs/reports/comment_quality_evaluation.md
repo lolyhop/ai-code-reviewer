@@ -18,8 +18,11 @@ ROUGE-L measures the Longest Common Subsequence (LCS) between the prediction and
 ### 2.2 Reasoning-Based: LLM-as-a-Judge
 Using a large language model (e.g., GPT-4 or Qwen-72B) prompted with a grading rubric to evaluate the prediction. [Link to Paper](https://arxiv.org/abs/2303.16634).
 *   **Mechanism:** The LLM receives the diff and both comments, outputting a score based on semantic helpfulness.
-*   **Pros:** Highly correlated with human judgment.
-*   **Cons:** API latency (seconds per sample) and significant computational/financial cost. **Rejected for offline evaluation loops** (though viable for periodic online validation).
+*   **Pros:** Highly correlated with human judgment; provides reasoning for interpretability.
+*   **Cons:**
+    *   **Data Privacy:** We are building an *On-Premise* solution for enterprise clients with sensitive code. Sending data to 3rd-party APIs (like OpenAI) is strictly prohibited.
+    *   **Hardware Limits:** To act as a reliable "Judge", an LLM needs significant reasoning capabilities (typically >7B parameters). Our local inference constraints limit us to smaller models (~2B parameters) for fast tasks. Hosting a heavy >7B model locally takes **2000+ ms per evaluation** and consumes massive GPU resources.
+*   **Decision:** **Rejected for offline iterative loops** due to hardware and speed constraints, but **accepted for the final representative evaluation** (where slow, high-quality local inference is acceptable).
 
 ### 2.3 Contextual Embeddings: BERTScore
 BERTScore computes token-level semantic similarity using pre-trained language models. [Link to Paper](https://arxiv.org/abs/1904.09675).
@@ -128,7 +131,38 @@ The following data was gathered via a local benchmark script (100-runs average) 
 | **CodeBERTScore**| Semantic | **BPE (Code)** | **~120 ms** | **0.9194 (Optimal)** |
 | **LLM-Judge\*** | Reasoning | N/A | ~2000+ ms | ~0.95 (Gold Standard) |
 
-\* LLM-as-a-Judge values are estimated based on industry benchmarks (G-Eval / Prometheus) for API/inference latency and human correlation.
+*\* Latency is referenced from local inference speeds of >7B parameter models (e.g., Llama-3-8B) on standard enterprise GPUs (NVIDIA T4 16GB), which average 20-30 tokens/sec. Processing the prompt context and generating Chain-of-Thought reasoning inherently requires >2 seconds per sample.*
 
-### Final Conclusion
-For all offline evaluation and model tuning, we will utilize **CodeBERTScore (Mean F1)**. It provides the necessary semantic depth to recognize Python idioms while maintaining the computational efficiency required for automated training loops.
+### 5.1 Iterative Evaluation Conclusion
+For all fast offline evaluation and model tuning, we will utilize **CodeBERTScore (Mean F1)**. It provides the necessary semantic depth to recognize Python idioms while maintaining the computational efficiency required for automated training loops, adhering to our On-Premise hardware limitations.
+
+## 6. Final Validation: Side-by-Side (SbS) Evaluation
+
+While CodeBERTScore is used for fast iterations, our **Final Benchmark** to present to business stakeholders will utilize a **Side-by-Side (SbS) LLM-as-a-Judge** approach. We will evaluate our AI against human reviewers across a representative sample of **~100 Pull Requests**.
+
+### 6.1 Evaluation Scope (PR-Level)
+To ensure the benchmark is representative of real-world impact, we evaluate at the **Pull Request level**, not just the individual comment level.
+* We extract the AI's predictions for *all changed files* in the PR.
+* Even if the human reviewer did not leave a comment on a specific file, that file is still included in the SbS comparison to catch False Positives (AI noise) or False Negatives (Human oversights).
+
+### 6.2 Interpretability Rubric (1-5 Scale)
+To ensure the LLM Judge provides interpretable and reproducible results, it will score both the Human and the AI independently on a strict 1 to 5 scale:
+
+*   **5 - Excellent:** Correctly identifies a critical bug or logical flaw and provides a clear, actionable fix. (Or, correctly remains silent when the code is flawless).
+*   **4 - Helpful:** Technically correct and useful, but wording could be clearer or addresses a less critical issue (e.g., code style).
+*   **3 - Neutral:** A trivial comment that neither harms nor significantly helps (e.g., nitpicking).
+*   **2 - Poor:** Missed a real bug (False Negative), or flagged a non-existent issue causing cognitive noise (False Positive).
+*   **1 - Harmful:** Severe hallucination, wrong localization, or provides advice that breaks the code.
+
+### 6.3 Handling the "Human Silence" Case
+A critical edge case is when a human did not comment, but the AI did (or vice versa). The Judge will use the rubric to score both:
+*   **AI found a real bug that the human missed:** The Judge scores **AI = 5** (bug found) and **Human = 2** (bug missed).
+*   **AI hallucinated a bug where the code was fine:** The Judge scores **Human = 5** (correctly remained silent) and **AI = 2** (false positive / noise).
+
+### 6.4 Win Rate Calculation
+The final business metric is the **AI Win Rate**. For every evaluated file in the PR:
+*   **AI Win:** AI Score > Human Score
+*   **Tie:** AI Score == Human Score
+*   **AI Loss:** AI Score < Human Score
+
+The final acceptance criteria will be determined by the aggregate Win/Tie percentage across the 100 PR validation set.
