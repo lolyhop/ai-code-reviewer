@@ -435,29 +435,3 @@ def filter_dataset_by_top_snapshot_commits(
                             out_entry[key] = file_entry[key]
                     tgt_pr["commits"][commit][path] = out_entry
     return out
-
-
-def prune_files_without_comments(dataset: MutableMapping[str, Any]) -> None:
-    """Remove file entries whose ``comments`` list is empty (e.g. legacy checkpoints).
-
-    Drops empty path maps, then empty commits, PRs, and repos. Mutates ``dataset`` in place.
-
-    Args:
-        dataset:
-            Nested mapping from ``make_dataset()`` or JSON round-trip.
-    """
-    for repo_name in list(dataset.keys()):
-        pr_map = dataset[repo_name]
-        for pr_number in list(pr_map.keys()):
-            commits = pr_map[pr_number]["commits"]
-            for snap in list(commits.keys()):
-                path_map = commits[snap]
-                for path in list(path_map.keys()):
-                    if len(path_map[path].get("comments", [])) == 0:
-                        del path_map[path]
-                if not commits[snap]:
-                    del commits[snap]
-            if not pr_map[pr_number]["commits"]:
-                del pr_map[pr_number]
-        if not dataset[repo_name]:
-            del dataset[repo_name]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import random
 import zipfile
 from collections import Counter, defaultdict
 from typing import Any, MutableMapping
@@ -383,6 +384,55 @@ async def gather_compare_patches_bounded(
     return out
 
 
+def _augment_snapshot_with_no_comment_files(
+    path_map: MutableMapping[str, Any],
+    cmap: dict[str, dict[str, Any]],
+    rng: random.Random,
+) -> None:
+    """Add changed .py files without comments to ``path_map``, balanced per snapshot.
+
+    Args:
+        path_map:
+            Mapping of normalized path → file entry for one snapshot commit.  Mutated
+            in place.
+        cmap:
+            Compare result for the same ``(pr_number, snapshot_commit)``: normalized
+            path → ``{"patch", "status", "filename", "previous_filename"}``.
+        rng:
+            Seeded :class:`random.Random` instance shared across all snapshots in a
+            repo enrichment call so the seed is applied consistently.
+    """
+    commented_count = sum(
+        1 for fe in path_map.values() if fe.get("comments")
+    )
+    if commented_count == 0:
+        return
+
+    candidates: list[str] = [
+        path_norm
+        for path_norm, cinfo in cmap.items()
+        if (
+            path_norm.endswith(".py")
+            and cinfo.get("patch")
+            and path_norm not in path_map
+        )
+    ]
+    if not candidates:
+        return
+
+    candidates.sort()
+    cap = min(commented_count, len(candidates))
+    selected = rng.sample(candidates, cap)
+    for path_norm in selected:
+        path_map[path_norm] = {"comments": []}
+    logger.debug(
+        "Augmented snapshot with %d no-comment .py file(s) (cap=%d, eligible=%d)",
+        len(selected),
+        cap,
+        len(candidates),
+    )
+
+
 def _prune_empty_dataset(dataset: MutableMapping[str, Any]) -> None:
     """Remove empty commit maps, PRs, and repos after enrichment."""
     for repo_name in list(dataset.keys()):
@@ -465,6 +515,14 @@ async def _enrich_one_repo(
     compare_cache: dict[tuple[Any, str], dict[str, dict[str, Any]]] = {}
     for pr_number, base_commit, snapshot_commit, cmap, _trunc in compare_results:
         compare_cache[(pr_number, snapshot_commit)] = cmap
+
+    if config.INCLUDE_NO_COMMENT_FILES:
+        rng = random.Random(config.SEED)
+        for pr_number in list(dataset[repo_name].keys()):
+            pr_entry = dataset[repo_name][pr_number]
+            for snapshot_commit, path_map in pr_entry["commits"].items():
+                cmap = compare_cache.get((pr_number, snapshot_commit), {})
+                _augment_snapshot_with_no_comment_files(path_map, cmap, rng)
 
     base_to_paths: defaultdict[str, set[str]] = defaultdict(set)
     for pr_number in list(dataset[repo_name].keys()):

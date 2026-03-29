@@ -22,12 +22,12 @@ DATASET_ENRICHED_PATH: Path = CHECKPOINT_DIR / "enriched.json.gz"
 DATASET_FINAL_PATH: Path = CHECKPOINT_DIR / "final.json.gz"
 
 # Dataset download range
-RANGE_START = datetime(2021, 1, 1, 0)
-RANGE_END = datetime(2021, 1, 2, 0)
+RANGE_START = datetime(2022, 1, 1, 0)
+RANGE_END = datetime(2022, 1, 1, 3)
 
 # Numbers of snapshot commits to keep
 # Should be aligned with GitHub API rate limit
-SNAPSHOT_COMMITS_TO_KEEP = 1000
+SNAPSHOT_COMMITS_TO_KEEP = 2000
 
 GH_ARCHIVE_API_BASE: str = "https://data.gharchive.org"
 GITHUB_API_BASE: str = "https://api.github.com"
@@ -44,7 +44,11 @@ GITHUB_RATE_LIMIT_MAX_SLEEP_SECONDS: float = 120.0
 
 IS_LIKELY_ENGLISH_THRESHOLD: float = 0.7
 
-DATASET_SCHEMA_VERSION: int = 1
+SEED: int = 42
+
+# When True, each snapshot commit is augmented with changed .py files that have no
+# review comments, capped at the number of commented files in that snapshot.
+INCLUDE_NO_COMMENT_FILES: bool = True
 
 HTTP_TIMEOUT_TOTAL: float = 600.0
 HTTP_TIMEOUT_CONNECT: float = 30.0

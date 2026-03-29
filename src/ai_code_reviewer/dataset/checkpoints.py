@@ -100,12 +100,6 @@ def load_dataset_checkpoint(
     with gzip.open(path, "rt", encoding="utf-8") as f:
         wrapper: dict[str, Any] = json.load(f)
 
-    ver = wrapper.get("schema_version")
-    if ver != config.DATASET_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported schema_version {ver!r}, expected {config.DATASET_SCHEMA_VERSION}"
-        )
-
     raw = wrapper.get("dataset")
     if not isinstance(raw, dict):
         raise ValueError("Checkpoint missing 'dataset' object")
@@ -138,7 +132,6 @@ def save_dataset_checkpoint(
     final_path.parent.mkdir(parents=True, exist_ok=True)
 
     wrapper = {
-        "schema_version": config.DATASET_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dataset": dataset_to_plain_dict(dataset),
     }
