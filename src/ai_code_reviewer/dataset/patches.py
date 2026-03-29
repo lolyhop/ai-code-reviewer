@@ -45,16 +45,14 @@ def map_head_lines_to_annotated_indices(
 ) -> list[int]:
     """Map each HEAD file line index (0-based) to annotated output line index (0-based).
 
-    Uses the same ``SequenceMatcher`` opcode walk as ``full_file_annotated_diff``.
-
     Args:
         base_lines:
-            Base file lines (with ``keepends``), aligned with ``head_lines`` for diffing.
+            Base file lines (with `keepends`), aligned with `head_lines` for diffing.
         head_lines:
             HEAD file lines after applying the patch.
 
     Returns:
-        For each head line ``j``, ``result[j]`` is the 0-based line index in the annotated
+        For each head line `j`, `result[j]` is the 0-based line index in the annotated
         string that displays that head line.
     """
     if not head_lines:
@@ -91,15 +89,15 @@ def head_blob_range_to_annotated_1based(
 
     Args:
         head_blob_start:
-            First line in the PR head file (1-based), or ``None``.
+            First line in the PR head file (1-based), or `None`.
         head_blob_end:
-            Last line in the PR head file (1-based), or ``None``.
+            Last line in the PR head file (1-based), or `None`.
         head_to_annotated:
-            Mapping from ``map_head_lines_to_annotated_indices`` for the same base/head pair.
+            Mapping from `map_head_lines_to_annotated_indices` for the same base/head pair.
 
     Returns:
-        ``(annotated_start_line, annotated_end_line)`` in 1-based form for ``patched_content``,
-        or ``(None, None)`` if out of range or inputs are invalid.
+        `(annotated_start_line, annotated_end_line)` in 1-based form for `patched_content`,
+        or `(None, None)` if out of range or inputs are invalid.
     """
     if head_blob_start is None or head_blob_end is None or not head_to_annotated:
         return None, None
@@ -118,22 +116,22 @@ def _with_trailing_newline(text: str) -> str:
 
 
 def apply_unified_patch(base_content: str, patch: str) -> str:
-    """Apply a unified diff to ``base_content`` and return the resulting text.
+    """Apply a unified diff to `base_content` and return the resulting text.
 
     Args:
         base_content:
             File at the old side of the diff (empty for newly added files).
         patch:
-            Unified diff text (e.g. GitHub compare ``patch`` field).
+            Unified diff text (e.g. GitHub compare `patch` field).
 
     Returns:
         Full file text after the patch, with a trailing newline when non-empty.
 
     Raises:
         ValueError:
-            If ``patch`` does not parse to at least one diff.
+            If `patch` does not parse to at least one diff.
         HunkApplyException:
-            If the patch does not apply cleanly to ``base_content``.
+            If the patch does not apply cleanly to `base_content`.
     """
     diffs = list(parse_patch(patch))
     if not diffs:
@@ -166,9 +164,9 @@ def compute_patched_content(
             Repo-relative path (for logs only).
 
     Returns:
-        ``(annotated_string, head_to_annotated)`` where ``head_to_annotated[j]`` is the
-        0-based line index in the annotated string for HEAD line ``j`` (0-based).
-        Both are ``None`` if the patch could not be applied.
+        `(annotated_string, head_to_annotated)` where `head_to_annotated[j]` is the
+        0-based line index in the annotated string for HEAD line `j` (0-based).
+        Both are `None` if the patch could not be applied.
     """
     try:
         head = apply_unified_patch(base_content, patch)
@@ -185,12 +183,7 @@ def compute_patched_content(
 
 
 def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> None:
-    """Set ``patched_content`` and per-comment ``annotated_*`` line fields.
-
-    Fills ``annotated_start_line`` / ``annotated_end_line`` (1-based indices into
-    ``patched_content``) from ``head_start_line`` / ``head_end_line`` using the
-    same alignment as ``full_file_annotated_diff``. On patch failure, sets those fields
-    to ``None``.
+    """Set `patched_content` and per-comment `annotated_*` line fields.
 
     Args:
         dataset:
