@@ -73,9 +73,6 @@ def _github_rate_limit_sleep_seconds(
 ) -> float:
     """Return seconds to sleep after a response when GitHub quota is low.
 
-    Does not apply to retryable error statuses (handled by tenacity). Proactive
-    backoff runs only after releasing the semaphore.
-
     Args:
         url:
             Request URL.
@@ -130,10 +127,7 @@ async def async_http_get_bytes(
     semaphore: asyncio.Semaphore,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, bytes]:
-    """GET ``url`` and return ``(status, body)``.
-
-    Retries on transient HTTP statuses, timeouts, and connection errors.
-    Does not retry on 404 or other final client errors (caller handles status).
+    """GET `url` and return `(status, body)`.
 
     Args:
         session:
@@ -187,10 +181,7 @@ async def async_http_get_json(
     semaphore: asyncio.Semaphore,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, Any | None]:
-    """GET ``url`` and parse JSON on HTTP 200.
-
-    Retries on transient failures. On non-200 responses returns ``(status, None)`` without
-    parsing (no retry for 404/401/403 unless they are listed as transient — they are not).
+    """GET `url` and parse JSON on HTTP 200.
 
     Args:
         session:
@@ -203,7 +194,7 @@ async def async_http_get_json(
             Optional request headers.
 
     Returns:
-        ``(status, parsed_json)`` where ``parsed_json`` is only set for status 200.
+        `(status, parsed_json)` where `parsed_json` is only set for status 200.
     """
 
     async def _attempt() -> tuple[int, Any | None]:
@@ -240,3 +231,65 @@ async def async_http_get_json(
         with attempt:
             return await _attempt()
     raise RuntimeError("async_http_get_json: unreachable")
+
+
+async def async_http_post_json(
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    payload: Any,
+    semaphore: asyncio.Semaphore,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any | None]:
+    """POST `url` with a JSON-serialisable body and parse the JSON response on HTTP 200.
+
+    Args:
+        session:
+            Shared aiohttp session.
+        url:
+            Full URL.
+        payload:
+            JSON-serialisable body to POST.
+        semaphore:
+            Concurrency limiter.
+        headers:
+            Optional request headers.
+
+    Returns:
+        `(status, parsed_json)` where `parsed_json` is only set for status 200.
+    """
+
+    async def _attempt() -> tuple[int, Any | None]:
+        status: int = 0
+        parsed: Any | None = None
+        hdrs: aiohttp.typedefs.LooseHeaders | None = None
+        async with semaphore:
+            async with session.post(url, json=payload, headers=headers) as response:
+                status = response.status
+                text = await response.text()
+                if status in config.HTTP_RETRY_STATUSES:
+                    ra = _parse_retry_after(response)
+                    raise RetryableHTTPStatusError(status, retry_after=ra)
+                hdrs = response.headers
+                if status == 200:
+                    parsed = json.loads(text)
+        if hdrs is not None:
+            await _maybe_github_rate_limit_sleep(url, status, hdrs)
+        if status != 200:
+            return status, None
+        return status, parsed
+
+    async for attempt in AsyncRetrying(
+        stop=stop_after_attempt(config.HTTP_MAX_RETRY_ATTEMPTS),
+        wait=_wait_retry_after_or_exponential,
+        retry=retry_if_exception(_should_retry_http),
+        before_sleep=lambda retry_state: logger.debug(
+            "HTTP POST JSON retry %s after %s",
+            retry_state.attempt_number,
+            retry_state.outcome.exception(),
+        ),
+        reraise=True,
+    ):
+        with attempt:
+            return await _attempt()
+    raise RuntimeError("async_http_post_json: unreachable")

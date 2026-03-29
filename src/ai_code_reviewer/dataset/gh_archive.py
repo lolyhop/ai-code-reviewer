@@ -6,7 +6,6 @@ import io
 import json
 import logging
 import re
-from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, MutableMapping
 
@@ -14,22 +13,11 @@ import aiohttp
 from tqdm import tqdm
 
 from ai_code_reviewer.dataset import config
+from ai_code_reviewer.dataset.dataset_utils import make_dataset, merge_datasets
 from ai_code_reviewer.dataset.http import async_http_get_bytes
 from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
 logger = logging.getLogger(__name__)
-
-
-def make_dataset() -> MutableMapping[str, Any]:
-    """Return an empty nested dataset structure (repo → PR → commits → paths → comments)."""
-    return defaultdict(
-        lambda: defaultdict(
-            lambda: {
-                "base_commit": None,
-                "commits": defaultdict(lambda: defaultdict(lambda: {"comments": []})),
-            }
-        )
-    )
 
 
 def is_likely_english(
@@ -43,7 +31,7 @@ def is_likely_english(
             The text to check.
         threshold:
             The threshold for the ASCII character ratio. Defaults to
-            ``config.IS_LIKELY_ENGLISH_THRESHOLD``.
+            `config.IS_LIKELY_ENGLISH_THRESHOLD`.
 
     Returns:
         True if the text is likely English, False otherwise.
@@ -92,16 +80,16 @@ def get_hunk_context_bounds(diff_hunk: str) -> tuple[int | None, int | None]:
 
 
 def parse_gh_archive_hour_bytes(compressed_data: bytes) -> MutableMapping[str, Any]:
-    """Decompress GH Archive ``.json.gz`` bytes and build a partial dataset tree.
+    """Decompress GH Archive `.json.gz` bytes and build a partial dataset tree.
 
-    Runs synchronously; callers should offload with ``asyncio.to_thread`` from async code.
+    Runs synchronously; callers should offload with `asyncio.to_thread` from async code.
 
     Args:
         compressed_data:
             Raw gzip-compressed NDJSON body.
 
     Returns:
-        Nested dataset mapping for this hour (same shape as ``make_dataset()``).
+        Nested dataset mapping for this hour (same shape as `make_dataset()`).
     """
     dataset = make_dataset()
     try:
@@ -183,7 +171,7 @@ def parse_gh_archive_hour_bytes(compressed_data: bytes) -> MutableMapping[str, A
                         "diff_hunk": diff_hunk,
                         "head_start_line": head_start_line,
                         "head_end_line": head_end_line,
-                        "comment_id": comment.get("id"),
+                        "comment_id": comment.get("node_id"),
                     }
                     path_map = pr_entry["commits"][snapshot_commit]
                     try:
@@ -234,57 +222,6 @@ async def fetch_pr_comments_for_hour(
     return dataset
 
 
-def merge_datasets(
-    target: MutableMapping[str, Any],
-    source: MutableMapping[str, Any],
-) -> None:
-    """Merge `source` into `target` in place.
-
-    For each repo, PR, commit, and path, appends comments from `source`,
-    skipping comments whose `comment_id` already exists in `target` for
-    that same file and commit snapshot. Path keys are normalized with
-    ``normalize_repo_rel_path`` so equivalent raw paths merge into one entry.
-
-    `base_commit` is taken from `source` only when `target` has no
-    `base_commit` yet (first merged hour wins).
-
-    Args:
-        target:
-            Dataset to merge into (mutated).
-        source:
-            Hourly dataset to merge from.
-    """
-    for repo_name, pr_map in source.items():
-        for pr_number, pr_entry in pr_map.items():
-            tgt_pr = target[repo_name][pr_number]
-            if tgt_pr["base_commit"] is None and pr_entry.get("base_commit"):
-                tgt_pr["base_commit"] = pr_entry["base_commit"]
-            for commit_commit, path_map in pr_entry["commits"].items():
-                for path, file_entry in path_map.items():
-                    path_norm = normalize_repo_rel_path(path)
-                    if path_norm is None:
-                        logger.warning(
-                            "Skipping merge for unsafe path key %r in %s PR %s",
-                            path,
-                            repo_name,
-                            pr_number,
-                        )
-                        continue
-                    tgt_file = tgt_pr["commits"][commit_commit][path_norm]
-                    existing_ids = {
-                        c["comment_id"]
-                        for c in tgt_file["comments"]
-                        if c.get("comment_id") is not None
-                    }
-                    for comment in file_entry["comments"]:
-                        cid = comment.get("comment_id")
-                        if cid is not None and cid in existing_ids:
-                            continue
-                        tgt_file["comments"].append(comment)
-                        if cid is not None:
-                            existing_ids.add(cid)
-
-
 async def fetch_pr_comments_range(
     session: aiohttp.ClientSession,
     start: datetime,
@@ -296,8 +233,8 @@ async def fetch_pr_comments_range(
     `start` and `end` are normalized to hour boundaries. All hours in the inclusive range
     `[start_hour, end_hour]` are fetched in parallel, then merged into one dataset.
     Duplicate comments (same `comment_id` on the same file/commit) are kept once.
-    Hour processing uses at most ``config.GH_ARCHIVE_CONCURRENCY`` worker coroutines;
-    concurrent HTTP remains limited by the passed semaphore (``GH_ARCHIVE_CONCURRENCY``).
+    Hour processing uses at most `config.GH_ARCHIVE_CONCURRENCY` worker coroutines;
+    concurrent HTTP remains limited by the passed semaphore (`GH_ARCHIVE_CONCURRENCY`).
 
     Args:
         session:

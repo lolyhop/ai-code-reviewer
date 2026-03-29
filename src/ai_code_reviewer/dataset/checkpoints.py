@@ -11,21 +11,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ai_code_reviewer.dataset import config
-
 logger = logging.getLogger(__name__)
 
 
 def dataset_to_plain_dict(obj: Any) -> Any:
-    """Recursively convert ``defaultdict`` and other mappings to plain ``dict`` / ``list``.
+    """Recursively convert `defaultdict` and other mappings to plain `dict` / `list`.
 
     Args:
         obj:
             Arbitrary nested structure (from the EDA dataset).
 
     Returns:
-        JSON-serializable structure with only ``dict``, ``list``, str, numbers, booleans,
-        and ``None``.
+        JSON-serializable structure with only `dict`, `list`, str, numbers, booleans,
+        and `None`.
     """
     if isinstance(obj, defaultdict):
         return {k: dataset_to_plain_dict(v) for k, v in obj.items()}
@@ -40,16 +38,16 @@ def plain_dict_to_dataset(
     data: dict[str, Any],
     make_dataset: Callable[[], MutableMapping[str, Any]],
 ) -> MutableMapping[str, Any]:
-    """Build a fresh ``make_dataset()`` tree from a plain JSON-loaded dict.
+    """Build a fresh `make_dataset()` tree from a plain JSON-loaded dict.
 
     Args:
         data:
-            Dataset mapping ``repo -> pr -> ...`` as loaded from JSON.
+            Dataset mapping `repo -> pr -> ...` as loaded from JSON.
         make_dataset:
-            Factory returning an empty dataset (e.g. ``make_dataset``).
+            Factory returning an empty dataset (e.g. `make_dataset`).
 
     Returns:
-        Nested ``defaultdict`` dataset compatible with the EDA pipeline.
+        Nested `defaultdict` dataset compatible with the EDA pipeline.
     """
     out = make_dataset()
     _merge_plain_dict_into_target(out, data)
@@ -60,7 +58,7 @@ def _merge_plain_dict_into_target(
     target: MutableMapping[str, Any],
     source: dict[str, Any],
 ) -> None:
-    """Merge JSON ``source`` into ``target`` (result of ``make_dataset()``)."""
+    """Merge JSON `source` into `target` (result of `make_dataset()`)."""
     for repo_name, pr_map in source.items():
         for pr_number, pr_entry in pr_map.items():
             tgt_pr = target[repo_name][pr_number]
@@ -81,20 +79,20 @@ def load_dataset_checkpoint(
     path: Path | str,
     make_dataset: Callable[[], MutableMapping[str, Any]],
 ) -> MutableMapping[str, Any]:
-    """Load a gzip JSON checkpoint and return a dataset compatible with ``make_dataset()``.
+    """Load a gzip JSON checkpoint and return a dataset compatible with `make_dataset()`.
 
     Args:
         path:
-            Path to ``*.json.gz`` written by ``save_dataset_checkpoint``.
+            Path to `*.json.gz` written by `save_dataset_checkpoint`.
         make_dataset:
             Dataset factory.
 
     Returns:
-        Nested ``defaultdict`` dataset.
+        Nested `defaultdict` dataset.
 
     Raises:
         ValueError:
-            If schema version is unsupported or the file is missing ``dataset``.
+            If schema version is unsupported or the file is missing `dataset`.
     """
     path = Path(path)
     with gzip.open(path, "rt", encoding="utf-8") as f:
@@ -111,18 +109,18 @@ def save_dataset_checkpoint(
     dataset: MutableMapping[str, Any],
     path: Path | str,
 ) -> Path:
-    """Atomically write the dataset to the given ``path`` (gzip JSON).
+    """Atomically write the dataset to the given `path` (gzip JSON).
 
-    The caller chooses ``path`` (including filename and parent directory).
+    The caller chooses `path` (including filename and parent directory).
 
     Args:
         dataset:
-            In-memory dataset (``defaultdict`` or plain nested dicts).
+            In-memory dataset (`defaultdict` or plain nested dicts).
         path:
-            Destination file path, typically ending in ``.json.gz``.
+            Destination file path, typically ending in `.json.gz`.
 
     Returns:
-        ``Path`` to the written file.
+        `Path` to the written file.
 
     Raises:
         OSError:

@@ -12,6 +12,7 @@ import aiohttp
 from tqdm import tqdm
 
 from ai_code_reviewer.dataset import config
+from ai_code_reviewer.dataset.dataset_utils import prune_empty_dataset
 from ai_code_reviewer.dataset.http import async_http_get_bytes, async_http_get_json
 from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
@@ -26,7 +27,7 @@ def _infer_zip_root_prefix(zf: zipfile.ZipFile) -> str | None:
             Open zip file.
 
     Returns:
-        Root prefix ending with ``/``, or None if the archive is empty.
+        Root prefix ending with `/`, or None if the archive is empty.
     """
     counts: Counter[str] = Counter()
     for name in zf.namelist():
@@ -63,7 +64,7 @@ def _resolve_base_text_from_cache(
             Compare entry for this file.
 
     Returns:
-        File text at ``base_commit``, or None if missing.
+        File text at `base_commit`, or None if missing.
     """
     for key in (path, cinfo.get("previous_filename"), cinfo.get("filename")):
         if not key:
@@ -80,8 +81,6 @@ def _resolve_base_text_from_cache(
 def _paths_for_base_zip_lookup(path_norm: str, cinfo: dict[str, Any]) -> set[str]:
     """Normalized repo paths to load from the base zipball.
 
-    Mirrors the lookup order in ``_resolve_base_text_from_cache`` (path, rename old, new).
-
     Args:
         path_norm:
             Normalized path from the dataset entry.
@@ -89,7 +88,7 @@ def _paths_for_base_zip_lookup(path_norm: str, cinfo: dict[str, Any]) -> set[str
             Compare file entry for this path.
 
     Returns:
-        Repo-relative paths to request from the zipball at ``base_commit``.
+        Repo-relative paths to request from the zipball at `base_commit`.
     """
     out: set[str] = set()
     for key in (path_norm, cinfo.get("previous_filename"), cinfo.get("filename")):
@@ -170,7 +169,7 @@ async def fetch_paths_from_zipball(
     semaphore: asyncio.Semaphore,
     headers: dict[str, str],
 ) -> tuple[int, dict[str, str | None]]:
-    """Download zip at ``base_commit`` and extract requested paths (one REST archive call).
+    """Download zip at `base_commit` and extract requested paths (one REST archive call).
 
     Args:
         owner:
@@ -318,10 +317,7 @@ async def gather_compare_patches_bounded(
     semaphore: asyncio.Semaphore,
     headers: dict[str, str],
 ) -> list[tuple[dict[str, dict[str, Any]], bool] | BaseException]:
-    """Run ``fetch_compare_patches`` for each meta with a bounded worker pool.
-
-    Uses at most ``config.GITHUB_API_CONCURRENCY`` concurrent coroutines
-    (not one task per snapshot). HTTP concurrency is still limited by ``semaphore``.
+    """Run `fetch_compare_patches` for each meta with a bounded worker pool.
 
     Args:
         session:
@@ -331,15 +327,15 @@ async def gather_compare_patches_bounded(
         repo:
             Repository name.
         compare_metas:
-            Ordered ``(pr_number, base_commit, snapshot_commit)`` tuples.
+            Ordered `(pr_number, base_commit, snapshot_commit)` tuples.
         semaphore:
             API concurrency limiter.
         headers:
             GitHub REST headers.
 
     Returns:
-        One list entry per ``compare_metas`` element, in order: either result
-        ``(path_to_info, maybe_truncated)`` or ``BaseException`` if the fetch failed.
+        One list entry per `compare_metas` element, in order: either result
+        `(path_to_info, maybe_truncated)` or `BaseException` if the fetch failed.
     """
     n = len(compare_metas)
     if n == 0:
@@ -389,22 +385,20 @@ def _augment_snapshot_with_no_comment_files(
     cmap: dict[str, dict[str, Any]],
     rng: random.Random,
 ) -> None:
-    """Add changed .py files without comments to ``path_map``, balanced per snapshot.
+    """Add changed .py files without comments to `path_map`, balanced per snapshot.
 
     Args:
         path_map:
             Mapping of normalized path → file entry for one snapshot commit.  Mutated
             in place.
         cmap:
-            Compare result for the same ``(pr_number, snapshot_commit)``: normalized
-            path → ``{"patch", "status", "filename", "previous_filename"}``.
+            Compare result for the same `(pr_number, snapshot_commit)`: normalized
+            path → `{"patch", "status", "filename", "previous_filename"}`.
         rng:
             Seeded :class:`random.Random` instance shared across all snapshots in a
             repo enrichment call so the seed is applied consistently.
     """
-    commented_count = sum(
-        1 for fe in path_map.values() if fe.get("comments")
-    )
+    commented_count = sum(1 for fe in path_map.values() if fe.get("comments"))
     if commented_count == 0:
         return
 
@@ -433,21 +427,6 @@ def _augment_snapshot_with_no_comment_files(
     )
 
 
-def _prune_empty_dataset(dataset: MutableMapping[str, Any]) -> None:
-    """Remove empty commit maps, PRs, and repos after enrichment."""
-    for repo_name in list(dataset.keys()):
-        pr_map = dataset[repo_name]
-        for pr_number in list(pr_map.keys()):
-            commits = pr_map[pr_number]["commits"]
-            for commit in list(commits.keys()):
-                if not commits[commit]:
-                    del commits[commit]
-            if not commits:
-                del pr_map[pr_number]
-        if not pr_map:
-            del dataset[repo_name]
-
-
 async def _enrich_one_repo(
     dataset: MutableMapping[str, Any],
     repo_name: str,
@@ -455,7 +434,20 @@ async def _enrich_one_repo(
     semaphore: asyncio.Semaphore,
     headers: dict[str, str],
 ) -> None:
-    """Enrich a single top-level repo key (compare, zipball, patch fields)."""
+    """Enrich a single top-level repo key (compare, zipball, patch fields).
+    
+    Args:
+        dataset:
+            Dataset to enrich.
+        repo_name:
+            Repository name.
+        session:
+            The aiohttp client session.
+        semaphore:
+            API concurrency limiter.
+        headers:
+            GitHub REST headers.
+    """
     parts = repo_name.split("/", 1)
     if len(parts) != 2 or not parts[0] or not parts[1]:
         logger.warning("Invalid repo_name %r; dropping repo.", repo_name)
@@ -641,13 +633,6 @@ async def enrich_dataset_with_base_and_patches(
 ) -> None:
     """Attach `base_content` and `patch` to each file entry.
 
-    Compare runs first (parallel per snapshot). Zipball paths are chosen only for files
-    that have a non-empty patch and are not ``added`` (those use empty base text), so the
-    repository archive is not downloaded when compare yields no usable patches.
-    Failures in one repository are logged and do not stop enrichment of other repos.
-    At most ``config.GITHUB_API_CONCURRENCY`` coroutines process repositories at a time;
-    HTTP parallelism remains limited by ``semaphore``.
-
     Args:
         dataset:
             Dataset to enrich.
@@ -659,7 +644,7 @@ async def enrich_dataset_with_base_and_patches(
     headers = config.github_api_headers()
     repo_names = list(dataset.keys())
     if not repo_names:
-        _prune_empty_dataset(dataset)
+        prune_empty_dataset(dataset)
         return
 
     worker_count = min(len(repo_names), config.GITHUB_API_CONCURRENCY)
@@ -688,4 +673,4 @@ async def enrich_dataset_with_base_and_patches(
         await asyncio.gather(*(_repo_worker() for _ in range(worker_count)))
     finally:
         pbar.close()
-    _prune_empty_dataset(dataset)
+    prune_empty_dataset(dataset)
