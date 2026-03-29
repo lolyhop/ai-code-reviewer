@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# EDA dataset checkpoints (large gzip JSON)
+data/checkpoints/
+
+
+.DS_Store

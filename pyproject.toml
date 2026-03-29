@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-code-reviewer"
+version = "0.1.0"
+description = "Dataset download and processing for AI-assisted code review research."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "ipykernel>=6.0.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "tqdm>=4.0",
+    "whatthepatch>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ai_code_reviewer*"]
