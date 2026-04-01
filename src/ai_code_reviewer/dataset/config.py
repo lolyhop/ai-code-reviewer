@@ -23,7 +23,7 @@ DATASET_FINAL_PATH: Path = CHECKPOINT_DIR / "final.json.gz"
 
 # Dataset download range
 RANGE_START = datetime(2022, 1, 1, 0)
-RANGE_END = datetime(2022, 1, 1, 3)
+RANGE_END = datetime(2022, 1, 1, 0)
 
 # Numbers of snapshot commits to keep
 # Should be aligned with GitHub API rate limit

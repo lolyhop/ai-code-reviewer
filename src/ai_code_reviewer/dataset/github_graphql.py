@@ -20,7 +20,10 @@ _GQL_STOP = object()
 _REVIEW_THREADS_QUERY = """
 query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
+    stargazerCount
     pullRequest(number: $pr) {
+      title
+      body
       reviewThreads(first: 100, after: $after) {
         pageInfo {
           hasNextPage
@@ -48,8 +51,12 @@ async def fetch_review_threads_for_pr(
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
     headers: dict[str, str],
-) -> tuple[bool, list[dict[str, Any]]]:
-    """Fetch all review thread nodes for a single PR via the GitHub GraphQL API.
+) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
+    """Fetch review threads, PR metadata, and repository metadata for a single PR.
+
+    PR-level fields (`title`, `body`) and repo-level fields
+    (`stargazerCount`) are captured from the first successful page response
+    and cached; subsequent pagination pages are used only for thread nodes.
 
     Args:
         owner:
@@ -67,13 +74,15 @@ async def fetch_review_threads_for_pr(
             token is available.
 
     Returns:
-        A tuple `(ok, threads)` where:
+        A tuple `(ok, threads, meta)` where:
 
-        - `ok=True` — request succeeded; `threads` contains the accumulated
-          thread nodes (may be empty when a PR has no review threads).
+        - `ok=True` — request succeeded; `threads` contains all accumulated
+          thread nodes (may be empty when a PR has no review threads);
+          `meta` is `{"title": str | None, "body": str | None,
+          "star_count": int | None}`.
         - `ok=False` — HTTP error, GraphQL body error, or `pullRequest` is
-          null; `threads` is always `[]`.  The caller should drop this PR
-          from the dataset.
+          null; `threads` is `[]` and `meta` is `{}`.  The caller
+          should drop this PR from the dataset.
 
     Raises:
         ValueError:
@@ -81,6 +90,7 @@ async def fetch_review_threads_for_pr(
     """
     pr_int = int(pr_number_str)
     all_threads: list[dict[str, Any]] = []
+    meta: dict[str, Any] | None = None
     cursor: str | None = None
 
     while True:
@@ -106,7 +116,7 @@ async def fetch_review_threads_for_pr(
                 pr_number_str,
                 status,
             )
-            return False, []
+            return False, [], {}
 
         gql_errors = data.get("errors")
         if gql_errors:
@@ -117,9 +127,10 @@ async def fetch_review_threads_for_pr(
                 pr_number_str,
                 gql_errors,
             )
-            return False, []
+            return False, [], {}
 
-        pull = ((data.get("data") or {}).get("repository") or {}).get("pullRequest")
+        repo_node: dict[str, Any] = (data.get("data") or {}).get("repository") or {}
+        pull: dict[str, Any] | None = repo_node.get("pullRequest")
         if not pull:
             logger.warning(
                 "PR %s not found in %s/%s via GraphQL; dropping PR.",
@@ -127,7 +138,14 @@ async def fetch_review_threads_for_pr(
                 owner,
                 repo,
             )
-            return False, []
+            return False, [], {}
+
+        if meta is None:
+            meta = {
+                "title": pull.get("title"),
+                "body": pull.get("body"),
+                "star_count": repo_node.get("stargazerCount"),
+            }
 
         review_threads = pull.get("reviewThreads") or {}
         nodes: list[dict[str, Any]] = review_threads.get("nodes") or []
@@ -139,7 +157,7 @@ async def fetch_review_threads_for_pr(
         else:
             break
 
-    return True, all_threads
+    return True, all_threads, meta or {}
 
 
 def build_comment_resolution_index(
@@ -165,12 +183,16 @@ def build_comment_resolution_index(
     return index
 
 
-def _populate_is_resolved_attribute(
+def _populate_is_resolved_on_comments(
     dataset: MutableMapping[str, Any],
     resolution_index: dict[str, bool],
 ) -> None:
-    """Populate the `is_resolved` attribute for each comment in the dataset
-    and filters out comments for which `is_resolved` could not be determined.
+    """Set `is_resolved` on each comment and drop those absent from the index.
+
+    Comments whose `comment_id` is not present in `resolution_index` are
+    removed from their file entry because resolution status could not be
+    determined (e.g. the comment was deleted or belongs to a different PR
+    snapshot).
 
     Args:
         dataset:
@@ -199,12 +221,49 @@ def _populate_is_resolved_attribute(
                     file_entry["comments"] = kept
 
 
-async def enrich_dataset_with_is_resolved_attribute(
+def _populate_pr_and_repo_metadata(
+    dataset: MutableMapping[str, Any],
+    meta_map: dict[tuple[str, str], dict[str, Any]],
+) -> None:
+    """Write PR-level and repository-level metadata into each PR entry.
+
+    Fields written per PR entry:
+
+    - `pr_title` — pull request title (`str | None`).
+    - `pr_body` — pull request description body (`str | None`).
+    - `repo_star_count` — repository star count at fetch time (`int | None`).
+
+    Args:
+        dataset:
+            Dataset to enrich (mutated in place).
+        meta_map:
+            Mapping of `(repo_name, pr_number)` to a dict with keys
+            `"title"`, `"body"`, and `"star_count"`.
+    """
+    for (repo_name, pr_number), meta in meta_map.items():
+        pr_entry = (dataset.get(repo_name) or {}).get(pr_number)
+        if pr_entry is not None:
+            pr_entry["pr_title"] = meta.get("title")
+            pr_entry["pr_body"] = meta.get("body")
+            pr_entry["repo_star_count"] = meta.get("star_count")
+
+
+async def enrich_dataset_with_graphql_info(
     dataset: MutableMapping[str, Any],
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
 ) -> None:
-    """Attach `is_resolved` to each dataset comment using the GitHub GraphQL API.
+    """Enrich each PR entry with PR metadata, repo metadata, and comment resolution.
+
+    For every PR in the dataset this function:
+
+    1. Fetches `title`, `body`, `stargazerCount`, and all
+       `reviewThreads` (paginated) via a single GraphQL query per page.
+    2. Stores `pr_title`, `pr_body`, and `repo_star_count` on the
+       PR-level entry.
+    3. Maps each inline comment to `is_resolved` via thread membership.
+    4. Removes comments whose resolution status could not be determined and
+       prunes empty repos / PRs that failed to fetch.
 
     Args:
         dataset:
@@ -223,10 +282,11 @@ async def enrich_dataset_with_is_resolved_attribute(
     ]
 
     if not pr_jobs:
-        logger.info("No PRs in dataset; skipping GraphQL is_resolved enrichment.")
+        logger.info("No PRs in dataset; skipping GraphQL enrichment.")
         return
 
     resolution_index: dict[str, bool] = {}
+    meta_map: dict[tuple[str, str], dict[str, Any]] = {}
     invalid_repo_set: set[str] = set()
     failed_pr_set: set[tuple[str, str]] = set()
 
@@ -237,7 +297,7 @@ async def enrich_dataset_with_is_resolved_attribute(
     for _ in range(worker_count):
         await work_queue.put(_GQL_STOP)
 
-    pbar = tqdm(total=len(pr_jobs), desc="GraphQL is_resolved enrichment")
+    pbar = tqdm(total=len(pr_jobs), desc="GraphQL enrichment")
 
     async def _worker() -> None:
         while True:
@@ -256,7 +316,7 @@ async def enrich_dataset_with_is_resolved_attribute(
                 continue
             owner, repo = parts
             try:
-                ok, threads = await fetch_review_threads_for_pr(
+                ok, threads, meta = await fetch_review_threads_for_pr(
                     owner,
                     repo,
                     pr_number_str,
@@ -267,6 +327,7 @@ async def enrich_dataset_with_is_resolved_attribute(
                 if ok:
                     index = build_comment_resolution_index(threads)
                     resolution_index.update(index)
+                    meta_map[(repo_name, pr_number_str)] = meta
                 else:
                     failed_pr_set.add((repo_name, pr_number_str))
             except Exception as exc:
@@ -294,5 +355,6 @@ async def enrich_dataset_with_is_resolved_attribute(
         if repo_name in dataset and pr_number in dataset[repo_name]:
             del dataset[repo_name][pr_number]
 
-    _populate_is_resolved_attribute(dataset, resolution_index)
+    _populate_pr_and_repo_metadata(dataset, meta_map)
+    _populate_is_resolved_on_comments(dataset, resolution_index)
     prune_empty_dataset(dataset)
