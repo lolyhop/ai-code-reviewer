@@ -18,6 +18,7 @@ from ai_code_reviewer.dataset.import_resolution import resolve_import_candidates
 from ai_code_reviewer.dataset.patches import (
     PatchedContentResult,
     compute_patched_content,
+    full_file_annotated_diff,
     head_blob_range_to_annotated_1based,
 )
 from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
@@ -166,6 +167,69 @@ def _extract_files_from_zip_bytes(
     return out
 
 
+def _scan_metadata_in_zip_bytes(
+    zip_bytes: bytes,
+    metadata_names: frozenset[str],
+) -> dict[str, str]:
+    """Scan a GitHub zipball and extract all files whose basename is in `metadata_names`.
+
+    Unlike :func:`_extract_files_from_zip_bytes`, this function does not require
+    knowing the paths in advance — it scans the full zip manifest and collects any
+    entry whose final path segment matches a requested metadata filename.
+
+    Args:
+        zip_bytes:
+            Raw zip bytes downloaded from the GitHub archive API.
+        metadata_names:
+            Set of filenames to match against the final path segment of each zip
+            entry (e.g. ``{"README.md", "requirements.txt"}``).
+
+    Returns:
+        Dict mapping each discovered repo-relative path to its decoded text content.
+        Entries that exceed ``config.MAX_FILE_BYTES`` or cannot be decoded as UTF-8
+        are silently skipped.
+    """
+    out: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            root = _infer_zip_root_prefix(zf)
+            if not root:
+                return out
+            for info in zf.infolist():
+                name = info.filename
+                if not name or info.is_dir():
+                    continue
+                basename = name.split("/")[-1]
+                if basename not in metadata_names:
+                    continue
+                if info.file_size > config.MAX_FILE_BYTES:
+                    logger.warning(
+                        "Skipping large metadata file in zip %s (size=%s)",
+                        name,
+                        info.file_size,
+                    )
+                    continue
+                # Strip the archive root prefix to get the repo-relative path.
+                if not name.startswith(root):
+                    continue
+                repo_rel = name[len(root):]
+                repo_rel_norm = normalize_repo_rel_path(repo_rel)
+                if repo_rel_norm is None:
+                    continue
+                try:
+                    raw = zf.read(info.filename)
+                    out[repo_rel_norm] = raw.decode("utf-8")
+                except (UnicodeDecodeError, ValueError) as exc:
+                    logger.warning(
+                        "Could not decode metadata file %s from zip: %s",
+                        repo_rel_norm,
+                        exc,
+                    )
+    except zipfile.BadZipFile as exc:
+        logger.error("Invalid zipball while scanning metadata: %s", exc)
+    return out
+
+
 async def fetch_paths_from_zipball(
     owner: str,
     repo: str,
@@ -217,6 +281,74 @@ async def fetch_paths_from_zipball(
         return status, {}
     extracted = await asyncio.to_thread(_extract_files_from_zip_bytes, data, paths)
     return status, extracted
+
+
+async def fetch_paths_and_metadata_from_zipball(
+    owner: str,
+    repo: str,
+    commit: str,
+    paths: set[str],
+    metadata_names: frozenset[str],
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    headers: dict[str, str],
+) -> tuple[int, dict[str, str | None], dict[str, str]]:
+    """Download a zipball once and extract both explicit paths and metadata files.
+
+    Downloads the archive at ``commit`` and performs two passes over the zip in a
+    single thread invocation: one to extract the caller-supplied ``paths`` (same
+    semantics as :func:`fetch_paths_from_zipball`) and one to scan the full manifest
+    for entries whose basename is in ``metadata_names``.
+
+    Args:
+        owner:
+            Repository owner login.
+        repo:
+            Repository name.
+        commit:
+            Commit SHA to download.
+        paths:
+            Repo-relative paths to extract explicitly (may be empty).
+        metadata_names:
+            Basenames to search for anywhere in the archive (may be empty).
+        session:
+            The aiohttp client session.
+        semaphore:
+            Concurrency limiter for API calls.
+        headers:
+            Request headers.
+
+    Returns:
+        A 3-tuple of:
+            - HTTP status code
+            - ``{path: content | None}`` for each entry in ``paths``
+            - ``{repo_rel_path: content}`` for each discovered metadata file
+    """
+    url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{commit}"
+    status, data = await async_http_get_bytes(
+        session, url, semaphore=semaphore, headers=headers
+    )
+    if status != 200:
+        text = data.decode("utf-8", errors="replace")[:400]
+        logger.warning(
+            "Zipball failed for %s/%s @ %s: HTTP %s %s",
+            owner,
+            repo,
+            commit[:7],
+            status,
+            text,
+        )
+        return status, {}, {}
+
+    def _extract_both() -> tuple[dict[str, str | None], dict[str, str]]:
+        path_mapping = _extract_files_from_zip_bytes(data, paths) if paths else {}
+        meta_mapping = (
+            _scan_metadata_in_zip_bytes(data, metadata_names) if metadata_names else {}
+        )
+        return path_mapping, meta_mapping
+
+    path_mapping, meta_mapping = await asyncio.to_thread(_extract_both)
+    return status, path_mapping, meta_mapping
 
 
 async def fetch_compare_patches(
@@ -522,15 +654,23 @@ async def _enrich_one_repo(
                 cmap = compare_cache.get((pr_number, snapshot_commit), {})
                 _augment_snapshot_with_no_comment_files(path_map, cmap, rng)
 
+    # Collect which Python files need to be fetched from each base-commit zipball.
     base_to_paths: defaultdict[str, set[str]] = defaultdict(set)
+    # All unique base commits (superset of base_to_paths keys — includes PRs whose
+    # Python files are all "added" so they don't need base content, but whose
+    # metadata files may still have changed and need a base-side diff).
+    all_base_commits: set[str] = set()
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
         base_commit = pr_entry.get("base_commit")
         if not base_commit:
             continue
+        all_base_commits.add(base_commit)
         for snapshot_commit, path_map in pr_entry["commits"].items():
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
             for path in path_map.keys():
+                if path == config.METADATA_FILES_COMMIT_KEY:
+                    continue
                 path_norm = normalize_repo_rel_path(path)
                 if path_norm is None:
                     continue
@@ -543,30 +683,35 @@ async def _enrich_one_repo(
                 for nk in _paths_for_base_zip_lookup(path_norm, cinfo):
                     base_to_paths[base_commit].add(nk)
 
+    _metadata_names: frozenset[str] = frozenset(config.METADATA_FILE_NAMES)
+
+    # base_commit → {path: content | None}  (Python file base content)
     base_caches: dict[str, dict[str, str | None]] = {}
+    # base_commit → {repo_rel_path: content}  (metadata file base content)
+    base_metadata_caches: dict[str, dict[str, str]] = {}
 
     async def fetch_one_base(
         base_commit: str,
-    ) -> tuple[str, int, dict[str, str | None]]:
-        paths_needed = base_to_paths[base_commit]
-        if not paths_needed:
-            return base_commit, 200, {}
-        status, mapping = await fetch_paths_from_zipball(
+    ) -> tuple[str, int, dict[str, str | None], dict[str, str]]:
+        paths_needed = base_to_paths.get(base_commit, set())
+        status, path_mapping, meta_mapping = await fetch_paths_and_metadata_from_zipball(
             owner,
             repo,
             base_commit,
             paths_needed,
+            _metadata_names,
             session,
             semaphore,
             headers,
         )
-        return base_commit, status, mapping
+        return base_commit, status, path_mapping, meta_mapping
 
-    zip_tasks = [fetch_one_base(bs) for bs in base_to_paths.keys()]
-    zip_results: list[tuple[str, int, dict[str, str | None]]] = []
+    all_base_list = list(all_base_commits)
+    zip_tasks = [fetch_one_base(bs) for bs in all_base_list]
+    zip_results: list[tuple[str, int, dict[str, str | None], dict[str, str]]] = []
     if zip_tasks:
         zip_raw = await asyncio.gather(*zip_tasks, return_exceptions=True)
-        for bs, res in zip(base_to_paths.keys(), zip_raw):
+        for bs, res in zip(all_base_list, zip_raw):
             if isinstance(res, BaseException):
                 logger.error(
                     "Zipball task failed for %s @ %s: %s",
@@ -574,23 +719,34 @@ async def _enrich_one_repo(
                     bs[:7],
                     res,
                 )
-                zip_results.append((bs, 599, {}))
+                zip_results.append((bs, 599, {}, {}))
             else:
                 zip_results.append(res)
 
-    for base_commit, status, path_map in zip_results:
+    for base_commit, status, path_map_result, meta_map_result in zip_results:
         if status != 200:
-            logger.warning(
-                "Zipball failed for %s @ %s: HTTP %s; dropping PRs with this base.",
-                repo_name,
-                base_commit[:7],
-                status,
-            )
-            for pr_number in list(dataset[repo_name].keys()):
-                if dataset[repo_name][pr_number].get("base_commit") == base_commit:
-                    del dataset[repo_name][pr_number]
+            if base_to_paths.get(base_commit):
+                # Only drop PRs when we actually needed Python base content.
+                logger.warning(
+                    "Zipball failed for %s @ %s: HTTP %s; dropping PRs with this base.",
+                    repo_name,
+                    base_commit[:7],
+                    status,
+                )
+                for pr_number in list(dataset[repo_name].keys()):
+                    if dataset[repo_name][pr_number].get("base_commit") == base_commit:
+                        del dataset[repo_name][pr_number]
+            else:
+                logger.warning(
+                    "Base zipball (metadata-only) failed for %s @ %s: HTTP %s; "
+                    "metadata diffs will be skipped.",
+                    repo_name,
+                    base_commit[:7],
+                    status,
+                )
         else:
-            base_caches[base_commit] = path_map
+            base_caches[base_commit] = path_map_result
+            base_metadata_caches[base_commit] = meta_map_result
 
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
@@ -604,6 +760,8 @@ async def _enrich_one_repo(
         for snapshot_commit in snapshot_commits:
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
             for path in list(pr_entry["commits"][snapshot_commit].keys()):
+                if path == config.METADATA_FILES_COMMIT_KEY:
+                    continue
                 file_entry = pr_entry["commits"][snapshot_commit][path]
                 path_norm = normalize_repo_rel_path(path)
                 if path_norm is None:
@@ -644,6 +802,8 @@ async def _enrich_one_repo(
         pr_entry = dataset[repo_name][pr_number]
         for snapshot_commit, path_map in pr_entry["commits"].items():
             for path, file_entry in path_map.items():
+                if path == config.METADATA_FILES_COMMIT_KEY:
+                    continue
                 base_str: str = file_entry.get("base_content") or ""
                 patch_str: str = file_entry.get("patch") or ""
                 if not patch_str:
@@ -696,52 +856,63 @@ async def _enrich_one_repo(
 
     # ------------------------------------------------------------------ #
     # Phase 6: fetch one snapshot zipball per unique snapshot_commit.     #
+    # Covers ALL snapshot commits (not only those with dep candidates) so #
+    # that metadata files can be scanned from every commit's archive.     #
     # ------------------------------------------------------------------ #
     dep_commit_to_content: dict[str, dict[str, str | None]] = {}
+    # snapshot_commit → {repo_rel_path: content}  (metadata HEAD content)
+    snapshot_metadata_head: dict[str, dict[str, str]] = {}
 
-    if commit_to_dep_candidates:
+    # Collect the full set of snapshot commits across every PR.
+    all_snapshot_commits: set[str] = set()
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        all_snapshot_commits.update(pr_entry["commits"].keys())
 
-        async def _fetch_dep_zip(
-            snapshot_commit: str,
-        ) -> tuple[str, int, dict[str, str | None]]:
-            paths_needed = commit_to_dep_candidates[snapshot_commit]
-            if not paths_needed:
-                return snapshot_commit, 200, {}
-            status, mapping = await fetch_paths_from_zipball(
-                owner,
-                repo,
-                snapshot_commit,
-                paths_needed,
-                session,
-                semaphore,
-                headers,
+    async def _fetch_dep_zip(
+        snapshot_commit: str,
+    ) -> tuple[str, int, dict[str, str | None], dict[str, str]]:
+        paths_needed = commit_to_dep_candidates.get(snapshot_commit, set())
+        status, path_mapping, meta_mapping = await fetch_paths_and_metadata_from_zipball(
+            owner,
+            repo,
+            snapshot_commit,
+            paths_needed,
+            _metadata_names,
+            session,
+            semaphore,
+            headers,
+        )
+        return snapshot_commit, status, path_mapping, meta_mapping
+
+    all_snapshot_list = list(all_snapshot_commits)
+    dep_tasks = [_fetch_dep_zip(c) for c in all_snapshot_list]
+    dep_raw = await asyncio.gather(*dep_tasks, return_exceptions=True)
+
+    for commit, raw_res in zip(all_snapshot_list, dep_raw):
+        if isinstance(raw_res, BaseException):
+            logger.error(
+                "Snapshot zipball failed for %s @ %s: %s",
+                repo_name,
+                commit[:7],
+                raw_res,
             )
-            return snapshot_commit, status, mapping
-
-        dep_tasks = [_fetch_dep_zip(c) for c in commit_to_dep_candidates]
-        dep_raw = await asyncio.gather(*dep_tasks, return_exceptions=True)
-
-        for commit, raw_res in zip(commit_to_dep_candidates.keys(), dep_raw):
-            if isinstance(raw_res, BaseException):
-                logger.error(
-                    "Dependency zipball failed for %s @ %s: %s",
+            dep_commit_to_content[commit] = {}
+            snapshot_metadata_head[commit] = {}
+        else:
+            _commit, status, path_mapping, meta_mapping = raw_res
+            if status != 200:
+                logger.warning(
+                    "Snapshot zipball HTTP %s for %s @ %s; skipping deps and metadata.",
+                    status,
                     repo_name,
                     commit[:7],
-                    raw_res,
                 )
                 dep_commit_to_content[commit] = {}
+                snapshot_metadata_head[commit] = {}
             else:
-                _commit, status, mapping = raw_res
-                if status != 200:
-                    logger.warning(
-                        "Dependency zipball HTTP %s for %s @ %s; skipping.",
-                        status,
-                        repo_name,
-                        commit[:7],
-                    )
-                    dep_commit_to_content[commit] = {}
-                else:
-                    dep_commit_to_content[commit] = mapping
+                dep_commit_to_content[commit] = path_mapping
+                snapshot_metadata_head[commit] = meta_mapping
 
     # ------------------------------------------------------------------ #
     # Phase 7: attach dependencies and log per-repo metrics.             #
@@ -752,6 +923,8 @@ async def _enrich_one_repo(
         for snapshot_commit, path_map in pr_entry["commits"].items():
             content_map = dep_commit_to_content.get(snapshot_commit, {})
             for path, file_entry in path_map.items():
+                if path == config.METADATA_FILES_COMMIT_KEY:
+                    continue
                 candidates = file_entry.pop("_dep_candidates", None)
                 if not candidates:
                     continue
@@ -764,7 +937,6 @@ async def _enrich_one_repo(
                         patched = dep_entry.get("patched_content")
                         if patched is not None:
                             dependencies[candidate] = patched
-                            total_resolved += 1
                             continue
                     # Priority 2: raw HEAD content from the snapshot zipball
                     # (covers unchanged dependencies and patched deps whose
@@ -775,31 +947,69 @@ async def _enrich_one_repo(
                 if dependencies:
                     file_entry["dependencies"] = dependencies
 
+    # ------------------------------------------------------------------ #
+    # Phase 8: attach metadata files at the commit level.                #
+    # For each snapshot commit, look up metadata file content from the   #
+    # snapshot zipball (HEAD).  When a metadata file was also changed    #
+    # between base and head (present in cmap with a patch), produce an   #
+    # annotated diff using full_file_annotated_diff; otherwise store the #
+    # raw HEAD text.  Results are written under the sentinel key         #
+    # config.METADATA_FILES_COMMIT_KEY directly in the path_map so they #
+    # travel with the commit-level data without conflicting with file    #
+    # path keys.                                                         #
+    # ------------------------------------------------------------------ #
+
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        base_commit = pr_entry.get("base_commit")
+        base_meta = base_metadata_caches.get(base_commit, {}) if base_commit else {}
+        for snapshot_commit, path_map in pr_entry["commits"].items():
+            head_meta = snapshot_metadata_head.get(snapshot_commit, {})
+            if not head_meta:
+                continue
+            cmap = compare_cache.get((pr_number, snapshot_commit), {})
+            result: dict[str, str] = {}
+            for meta_path, head_text in head_meta.items():
+                cinfo = cmap.get(meta_path)
+                if cinfo and cinfo.get("patch"):
+                    base_text = base_meta.get(meta_path, "")
+                    result[meta_path] = full_file_annotated_diff(base_text, head_text)
+                else:
+                    result[meta_path] = head_text
+            if result:
+                path_map[config.METADATA_FILES_COMMIT_KEY] = result
+
 
 async def enrich_dataset_with_code(
     dataset: MutableMapping[str, Any],
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
 ) -> None:
-    """Enrich the dataset with file content, patch annotations, and dependencies.
+    """Enrich the dataset with file content, patch annotations, dependencies, and metadata.
 
     For every repo this function runs :func:`_enrich_one_repo`, which performs
-    all seven enrichment phases in a single pass:
+    all eight enrichment phases in a single pass:
 
     1. Fetch compare patches (one REST call per snapshot commit).
     2. Augment snapshots with balanced no-comment ``.py`` files.
-    3. Fetch base-commit zipballs (one per unique ``base_commit``).
+    3. Fetch base-commit zipballs (one per unique ``base_commit``); extract both
+       Python file base content and metadata file base content via
+       :func:`_scan_metadata_in_zip_bytes`.
     4. Apply patches inline — sets ``patched_content`` and annotated comment
        line numbers on each file entry.
     5. Parse Python imports from HEAD file text; collect all in-repo dependency
        candidates (including files also changed in the same snapshot).
-    6. Fetch snapshot-commit zipballs (one per unique ``snapshot_commit``) to
-       resolve unchanged in-repo dependency files.
+    6. Fetch snapshot-commit zipballs (one per unique ``snapshot_commit``, covering
+       all commits) to resolve unchanged in-repo dependency files and to extract
+       metadata HEAD content.
     7. Attach ``dependencies: {path: content}`` to each file entry.  For
        dependency files that were themselves patched in the same snapshot the
        stored content is the annotated patched view (``-``/``+`` prefixed);
        for unchanged dependencies it is the raw HEAD file text from the
        snapshot zipball.  Logs per-repo resolution metrics.
+    8. Attach ``metadata_files: {path: content}`` at the commit level (under
+       ``config.METADATA_FILES_COMMIT_KEY``).  Content is an annotated diff when
+       the file changed between base and head; otherwise raw HEAD text.
 
     Repos are processed concurrently up to ``config.GITHUB_API_CONCURRENCY``
     workers.
