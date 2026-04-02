@@ -21,8 +21,8 @@ DATASET_FILTERED_PATH: Path = CHECKPOINT_DIR / "filtered.json.gz"
 DATASET_FINAL_PATH: Path = CHECKPOINT_DIR / "final.json.gz"
 
 # Dataset download range
-RANGE_START = datetime(2022, 1, 2, 0)
-RANGE_END = datetime(2022, 1, 2, 0)
+RANGE_START = datetime(2022, 1, 3, 0)
+RANGE_END = datetime(2022, 1, 3, 0)
 
 # Numbers of snapshot commits to keep
 # Should be aligned with GitHub API rate limit
@@ -34,6 +34,26 @@ GITHUB_GRAPHQL_API: str = "https://api.github.com/graphql"
 
 # Skip blobs larger than this when reading from zipballs (GitHub contenkts API parity).
 MAX_FILE_BYTES: int = 10_048_576
+
+# Source-root prefixes tried when resolving absolute Python imports.
+# The empty string represents the repository root itself; "src" covers the
+# common `src/` layout used by setuptools/poetry projects.  Both
+# `import_resolution.resolve_import_candidates` (forward direction: import
+# statement → candidate paths) and `github_api._incoming_import_target_variants`
+# (inverse direction: changed file path → expected import candidates) use this
+# as their single source of truth.
+IMPORT_SOURCE_ROOTS: tuple[str, ...] = ("", "src")
+
+# Minimum character length for a symbol name to be included in incoming-dependency
+# search.  Short names (e.g. `do`, `ok`) match too broadly across a repo.
+INCOMING_DEP_MIN_SYMBOL_LENGTH: int = 3
+
+# Maximum number of symbols (function/class/method names) collected per changed
+# file for incoming-dependency search.  When a file has more qualifying symbols
+# the longest names are kept (more specific identifiers produce fewer false
+# positives).  Every changed file always participates — only its symbol set is
+# trimmed, never the file itself.
+INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 20
 
 GH_ARCHIVE_CONCURRENCY: int = 5
 GITHUB_API_CONCURRENCY: int = 5
