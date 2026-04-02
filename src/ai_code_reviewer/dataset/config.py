@@ -18,12 +18,11 @@ CHECKPOINT_DIR: Path = _DATA_ROOT / "checkpoints"
 
 DATASET_RAW_PATH: Path = CHECKPOINT_DIR / "dataset_raw.json.gz"
 DATASET_FILTERED_PATH: Path = CHECKPOINT_DIR / "filtered.json.gz"
-DATASET_ENRICHED_PATH: Path = CHECKPOINT_DIR / "enriched.json.gz"
 DATASET_FINAL_PATH: Path = CHECKPOINT_DIR / "final.json.gz"
 
 # Dataset download range
-RANGE_START = datetime(2022, 1, 1, 0)
-RANGE_END = datetime(2022, 1, 1, 0)
+RANGE_START = datetime(2022, 1, 2, 0)
+RANGE_END = datetime(2022, 1, 2, 0)
 
 # Numbers of snapshot commits to keep
 # Should be aligned with GitHub API rate limit

@@ -14,6 +14,12 @@ from tqdm import tqdm
 from ai_code_reviewer.dataset import config
 from ai_code_reviewer.dataset.dataset_utils import prune_empty_dataset
 from ai_code_reviewer.dataset.http import async_http_get_bytes, async_http_get_json
+from ai_code_reviewer.dataset.import_resolution import resolve_import_candidates
+from ai_code_reviewer.dataset.patches import (
+    PatchedContentResult,
+    compute_patched_content,
+    head_blob_range_to_annotated_1based,
+)
 from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
 logger = logging.getLogger(__name__)
@@ -435,7 +441,7 @@ async def _enrich_one_repo(
     headers: dict[str, str],
 ) -> None:
     """Enrich a single top-level repo key (compare, zipball, patch fields).
-    
+
     Args:
         dataset:
             Dataset to enrich.
@@ -625,19 +631,184 @@ async def _enrich_one_repo(
                     file_entry["base_content"] = base_text
                     file_entry["patch"] = patch
 
+    # ------------------------------------------------------------------ #
+    # Phase 4 + 5: apply patches inline; collect dependency candidates.  #
+    # ------------------------------------------------------------------ #
+    # Candidates are stored directly on each file_entry under the temporary
+    # key "_dep_candidates" so the association is always 1-to-1 with the
+    # entry object (avoids (commit, path) key collisions across PRs).
+    # snapshot_commit → union of all candidates across files in that commit
+    commit_to_dep_candidates: defaultdict[str, set[str]] = defaultdict(set)
 
-async def enrich_dataset_with_base_and_patches(
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        for snapshot_commit, path_map in pr_entry["commits"].items():
+            for path, file_entry in path_map.items():
+                base_str: str = file_entry.get("base_content") or ""
+                patch_str: str = file_entry.get("patch") or ""
+                if not patch_str:
+                    continue
+
+                result: PatchedContentResult | None = compute_patched_content(
+                    base_str, patch_str, path
+                )
+                if result is None:
+                    for comment in file_entry.get("comments", []):
+                        comment["annotated_start_line"] = None
+                        comment["annotated_end_line"] = None
+                    continue
+
+                file_entry["patched_content"] = result.annotated
+                for comment in file_entry.get("comments", []):
+                    a_s, a_e = head_blob_range_to_annotated_1based(
+                        comment.get("head_start_line"),
+                        comment.get("head_end_line"),
+                        result.head_to_annotated,
+                    )
+                    comment["annotated_start_line"] = a_s
+                    comment["annotated_end_line"] = a_e
+
+                if not path.endswith(".py"):
+                    continue
+
+                candidates, unresolvable = resolve_import_candidates(
+                    result.head_text, path
+                )
+                if unresolvable:
+                    logger.debug(
+                        "Unresolvable import statements in %s: %d",
+                        path,
+                        unresolvable,
+                    )
+                candidates = {
+                    c
+                    for c in candidates
+                    if c.endswith(".py") and c != path
+                }
+                if candidates:
+                    file_entry["_dep_candidates"] = candidates
+                    # Candidates that also appear in path_map (patched in this
+                    # snapshot) are resolved via patched_content in Phase 7.
+                    # We still add all candidates here so a zipball fallback is
+                    # available when patched_content is absent for a candidate
+                    # (e.g. patch application failed for that file).
+                    commit_to_dep_candidates[snapshot_commit] |= candidates
+
+    # ------------------------------------------------------------------ #
+    # Phase 6: fetch one snapshot zipball per unique snapshot_commit.     #
+    # ------------------------------------------------------------------ #
+    dep_commit_to_content: dict[str, dict[str, str | None]] = {}
+
+    if commit_to_dep_candidates:
+
+        async def _fetch_dep_zip(
+            snapshot_commit: str,
+        ) -> tuple[str, int, dict[str, str | None]]:
+            paths_needed = commit_to_dep_candidates[snapshot_commit]
+            if not paths_needed:
+                return snapshot_commit, 200, {}
+            status, mapping = await fetch_paths_from_zipball(
+                owner,
+                repo,
+                snapshot_commit,
+                paths_needed,
+                session,
+                semaphore,
+                headers,
+            )
+            return snapshot_commit, status, mapping
+
+        dep_tasks = [_fetch_dep_zip(c) for c in commit_to_dep_candidates]
+        dep_raw = await asyncio.gather(*dep_tasks, return_exceptions=True)
+
+        for commit, raw_res in zip(commit_to_dep_candidates.keys(), dep_raw):
+            if isinstance(raw_res, BaseException):
+                logger.error(
+                    "Dependency zipball failed for %s @ %s: %s",
+                    repo_name,
+                    commit[:7],
+                    raw_res,
+                )
+                dep_commit_to_content[commit] = {}
+            else:
+                _commit, status, mapping = raw_res
+                if status != 200:
+                    logger.warning(
+                        "Dependency zipball HTTP %s for %s @ %s; skipping.",
+                        status,
+                        repo_name,
+                        commit[:7],
+                    )
+                    dep_commit_to_content[commit] = {}
+                else:
+                    dep_commit_to_content[commit] = mapping
+
+    # ------------------------------------------------------------------ #
+    # Phase 7: attach dependencies and log per-repo metrics.             #
+    # ------------------------------------------------------------------ #
+
+    for pr_number in list(dataset[repo_name].keys()):
+        pr_entry = dataset[repo_name][pr_number]
+        for snapshot_commit, path_map in pr_entry["commits"].items():
+            content_map = dep_commit_to_content.get(snapshot_commit, {})
+            for path, file_entry in path_map.items():
+                candidates = file_entry.pop("_dep_candidates", None)
+                if not candidates:
+                    continue
+                dependencies: dict[str, str] = {}
+                for candidate in sorted(candidates):
+                    # Priority 1: annotated patched content when the dependency
+                    # file was itself changed in the same snapshot commit.
+                    dep_entry = path_map.get(candidate)
+                    if dep_entry is not None:
+                        patched = dep_entry.get("patched_content")
+                        if patched is not None:
+                            dependencies[candidate] = patched
+                            total_resolved += 1
+                            continue
+                    # Priority 2: raw HEAD content from the snapshot zipball
+                    # (covers unchanged dependencies and patched deps whose
+                    # patch application failed).
+                    content = content_map.get(candidate)
+                    if content is not None:
+                        dependencies[candidate] = content
+                if dependencies:
+                    file_entry["dependencies"] = dependencies
+
+
+async def enrich_dataset_with_code(
     dataset: MutableMapping[str, Any],
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
 ) -> None:
-    """Attach `base_content` and `patch` to each file entry.
+    """Enrich the dataset with file content, patch annotations, and dependencies.
+
+    For every repo this function runs :func:`_enrich_one_repo`, which performs
+    all seven enrichment phases in a single pass:
+
+    1. Fetch compare patches (one REST call per snapshot commit).
+    2. Augment snapshots with balanced no-comment ``.py`` files.
+    3. Fetch base-commit zipballs (one per unique ``base_commit``).
+    4. Apply patches inline — sets ``patched_content`` and annotated comment
+       line numbers on each file entry.
+    5. Parse Python imports from HEAD file text; collect all in-repo dependency
+       candidates (including files also changed in the same snapshot).
+    6. Fetch snapshot-commit zipballs (one per unique ``snapshot_commit``) to
+       resolve unchanged in-repo dependency files.
+    7. Attach ``dependencies: {path: content}`` to each file entry.  For
+       dependency files that were themselves patched in the same snapshot the
+       stored content is the annotated patched view (``-``/``+`` prefixed);
+       for unchanged dependencies it is the raw HEAD file text from the
+       snapshot zipball.  Logs per-repo resolution metrics.
+
+    Repos are processed concurrently up to ``config.GITHUB_API_CONCURRENCY``
+    workers.
 
     Args:
         dataset:
-            Dataset to enrich.
+            Nested dataset mapping (mutated in place).
         session:
-            The aiohttp client session.
+            Shared aiohttp client session.
         semaphore:
             API concurrency limiter.
     """
