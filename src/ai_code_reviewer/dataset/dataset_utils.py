@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 from typing import Any, MutableMapping
 
+from ai_code_reviewer.dataset import config
 from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ def merge_datasets(
                 tgt_pr["base_commit"] = pr_entry["base_commit"]
             for snapshot_commit, path_map in pr_entry["commits"].items():
                 for path, file_entry in path_map.items():
+                    if path == config.METADATA_FILES_COMMIT_KEY:
+                        continue
                     path_norm = normalize_repo_rel_path(path)
                     if path_norm is None:
                         logger.warning(
@@ -93,7 +96,12 @@ def prune_empty_dataset(dataset: MutableMapping[str, Any]) -> None:
         for pr_number in list(pr_map.keys()):
             commits = pr_map[pr_number]["commits"]
             for commit in list(commits.keys()):
-                if not commits[commit]:
+                real_keys = [
+                    k
+                    for k in commits[commit]
+                    if k != config.METADATA_FILES_COMMIT_KEY
+                ]
+                if not real_keys:
                     del commits[commit]
             if not commits:
                 del pr_map[pr_number]
