@@ -16,7 +16,7 @@ class PatchedContentResult:
     """Result of :func:`compute_patched_content`.
 
     Attributes:
-        annotated: Full-file annotated diff view with ``-``/``+`` line prefixes.
+        annotated: Full-file annotated diff view with `-`/`+` line prefixes.
         head_text: Clean HEAD file content after applying the patch (no markers).
         head_to_annotated: Mapping from 0-based HEAD line index to 0-based
             annotated view line index.
@@ -181,7 +181,7 @@ def compute_patched_content(
             Repo-relative path (for logs only).
 
     Returns:
-        :class:`PatchedContentResult` on success, or ``None`` if the patch could
+        :class:`PatchedContentResult` on success, or `None` if the patch could
         not be applied cleanly.
     """
     try:
@@ -203,18 +203,18 @@ def compute_patched_content(
 
 
 def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> None:
-    """Set ``patched_content`` and per-comment ``annotated_*`` line fields.
+    """Set `patched_content` and per-comment `annotated_*` line fields.
 
     Standalone utility for applying patches and computing annotated views
     outside the main enrichment pipeline.  The canonical pipeline uses
     :func:`github_api.enrich_dataset_with_code`, which performs this step
     inline as phase 4.
 
-    For each file entry that has both ``base_content`` and ``patch``:
+    For each file entry that has both `base_content` and `patch`:
 
-    - ``patched_content`` — annotated diff view (``-``/``+`` prefix per line).
-    - ``annotated_start_line`` / ``annotated_end_line`` — 1-based line numbers
-      in ``patched_content`` for each review comment.
+    - `patched_content` — annotated diff view (`-`/`+` prefix per line).
+    - `annotated_start_line` / `annotated_end_line` — 1-based line numbers
+      in `patched_content` for each review comment.
 
     Args:
         dataset:

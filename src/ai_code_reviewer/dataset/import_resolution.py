@@ -4,18 +4,17 @@ import ast
 import logging
 import sys
 
+from ai_code_reviewer.dataset.config import IMPORT_SOURCE_ROOTS
+
 logger = logging.getLogger(__name__)
 
-# Source-root prefixes tried when resolving absolute imports.
-# The empty string represents the repository root itself; "src" covers the
-# common ``src/`` layout used by setuptools/poetry projects.
-_DEFAULT_SOURCE_ROOTS: tuple[str, ...] = ("", "src")
+_DEFAULT_SOURCE_ROOTS = IMPORT_SOURCE_ROOTS
 
 # Top-level names belonging to the standard library or the interpreter's
 # built-in modules.  Imports whose first dotted component appears here are
 # guaranteed not to resolve to files inside the repository, so we skip
 # candidate generation for them entirely.
-# ``sys.stdlib_module_names`` is available from Python 3.10 onward; we fall
+# `sys.stdlib_module_names` is available from Python 3.10 onward; we fall
 # back gracefully to an empty set so the filter is simply a no-op on older
 # interpreters.
 _STDLIB_TOP_LEVEL: frozenset[str] = frozenset(
@@ -30,11 +29,11 @@ def _module_parts_to_candidates(
     """Generate candidate repo-relative paths for an absolute module reference.
 
     For each source root and each target module, two candidates are produced:
-    the plain ``module.py`` form and the ``module/__init__.py`` package form.
+    the plain `module.py` form and the `module/__init__.py` package form.
 
     Args:
         parts:
-            Dotted module name split on ``"."``, e.g. ``["pkg", "sub", "mod"]``.
+            Dotted module name split on `"."`, e.g. `["pkg", "sub", "mod"]`.
         source_roots:
             Source root prefixes to probe.  An empty string means repo root.
 
@@ -58,23 +57,23 @@ def _relative_import_candidates(
     """Compute candidate paths for a relative import statement.
 
     Relative imports are resolved with respect to the package directory of
-    ``file_path``.  A level of 1 means the current package; 2 means the parent
+    `file_path`.  A level of 1 means the current package; 2 means the parent
     package; and so on.
 
     Args:
         module:
-            Dotted sub-module name after the dots, e.g. ``"utils"`` for
-            ``from . import utils`` or ``"a.b"`` for ``from ..a import b``.
-            ``None`` for a bare ``from . import name`` (each name is handled
+            Dotted sub-module name after the dots, e.g. `"utils"` for
+            `from . import utils` or `"a.b"` for `from ..a import b`.
+            `None` for a bare `from . import name` (each name is handled
             separately by the caller).
         level:
             Number of leading dots (must be >= 1).
         file_path:
             Repo-relative path of the file containing the import, using
-            forward slashes (e.g. ``"pkg/sub/module.py"``).
+            forward slashes (e.g. `"pkg/sub/module.py"`).
 
     Returns:
-        List of candidate repo-relative paths, or ``None`` if the relative
+        List of candidate repo-relative paths, or `None` if the relative
         level exceeds the available directory depth (would escape the repo root).
     """
     norm = file_path.replace("\\", "/").lstrip("/")
@@ -115,8 +114,8 @@ def _candidates_for_node(
             Source-root prefixes for absolute import resolution.
 
     Returns:
-        A tuple ``(candidates, unresolvable)`` where ``unresolvable`` is
-        ``True`` when the import cannot be mapped to candidate paths at all
+        A tuple `(candidates, unresolvable)` where `unresolvable` is
+        `True` when the import cannot be mapped to candidate paths at all
         (e.g. a relative import that escapes the repo root).
     """
     candidates: list[str] = []
@@ -143,12 +142,12 @@ def _candidates_for_node(
         candidates.extend(pkg_candidates)
 
         # Each imported name could be a submodule regardless of whether a
-        # dotted ``module_name`` was given.
+        # dotted `module_name` was given.
         #
-        # ``from . import utils``        → module_name=None  → anchor = pkg dir
-        # ``from .utils import submod``  → module_name="utils" → anchor = utils
+        # `from . import utils`        → module_name=None  → anchor = pkg dir
+        # `from .utils import submod`  → module_name="utils" → anchor = utils
         #
-        # In both cases ``alias.name`` may refer to a file under the anchor dir.
+        # In both cases `alias.name` may refer to a file under the anchor dir.
         if module_name:
             # anchor is the resolved pkg dir (strip ".py" from the first candidate)
             anchor_base = pkg_candidates[0].removesuffix(".py")
@@ -168,7 +167,7 @@ def _candidates_for_node(
                 candidates.append(f"{sub}.py")
                 candidates.append(f"{sub}/__init__.py")
     else:
-        # Absolute import: ``from pkg.mod import name``
+        # Absolute import: `from pkg.mod import name`
         if not node.module:
             return [], False
 
@@ -176,7 +175,7 @@ def _candidates_for_node(
         if mod_parts[0] in _STDLIB_TOP_LEVEL:
             return [], False
 
-        # Candidates for the ``from`` module itself.
+        # Candidates for the `from` module itself.
         candidates.extend(_module_parts_to_candidates(mod_parts, source_roots))
 
         # Each imported name could be a submodule.
@@ -212,13 +211,13 @@ def resolve_import_candidates(
             Repo-relative path of the file (used for relative-import anchoring).
         source_roots:
             Tuple of source-root prefixes to probe for absolute imports.
-            Defaults to ``("", "src")``.
+            Defaults to `("", "src")`.
 
     Returns:
-        A tuple ``(candidates, unresolvable_count)`` where:
+        A tuple `(candidates, unresolvable_count)` where:
 
-        - ``candidates`` is the set of candidate repo-relative paths.
-        - ``unresolvable_count`` is the number of import statements that could
+        - `candidates` is the set of candidate repo-relative paths.
+        - `unresolvable_count` is the number of import statements that could
           not be mapped to any candidate path (e.g. a relative import that
           escapes the repo root due to excessive dot levels).
     """
@@ -226,7 +225,9 @@ def resolve_import_candidates(
         tree = ast.parse(source_code, filename=file_path)
     except SyntaxError as exc:
         logger.debug("SyntaxError parsing %s for import extraction: %s", file_path, exc)
-        return set(), 0
+        # Treat an unparseable file as one unresolvable import statement so
+        # callers see a non-zero count and can log the failure correctly.
+        return set(), 1
 
     all_candidates: set[str] = set()
     unresolvable_count = 0
