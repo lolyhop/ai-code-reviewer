@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, MutableMapping
 
@@ -8,6 +9,22 @@ from whatthepatch import apply_diff, parse_patch
 from whatthepatch.exceptions import HunkApplyException
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PatchedContentResult:
+    """Result of :func:`compute_patched_content`.
+
+    Attributes:
+        annotated: Full-file annotated diff view with ``-``/``+`` line prefixes.
+        head_text: Clean HEAD file content after applying the patch (no markers).
+        head_to_annotated: Mapping from 0-based HEAD line index to 0-based
+            annotated view line index.
+    """
+
+    annotated: str
+    head_text: str
+    head_to_annotated: list[int]
 
 
 def full_file_annotated_diff(base_text: str, head_text: str) -> str:
@@ -152,8 +169,8 @@ def compute_patched_content(
     base_content: str,
     patch: str,
     path: str,
-) -> tuple[str | None, list[int] | None]:
-    """Return annotated full-file view and HEAD-to-annotated line mapping.
+) -> PatchedContentResult | None:
+    """Return annotated full-file view, clean HEAD text, and HEAD-to-annotated mapping.
 
     Args:
         base_content:
@@ -164,26 +181,40 @@ def compute_patched_content(
             Repo-relative path (for logs only).
 
     Returns:
-        `(annotated_string, head_to_annotated)` where `head_to_annotated[j]` is the
-        0-based line index in the annotated string for HEAD line `j` (0-based).
-        Both are `None` if the patch could not be applied.
+        :class:`PatchedContentResult` on success, or ``None`` if the patch could
+        not be applied cleanly.
     """
     try:
         head = apply_unified_patch(base_content, patch)
     except (HunkApplyException, ValueError) as exc:
         logger.warning("could not apply patch for %s: %s", path, exc)
-        return None, None
+        return None
     base_norm = _with_trailing_newline(base_content)
     head_norm = _with_trailing_newline(head)
     a = base_norm.splitlines(keepends=True)
     b = head_norm.splitlines(keepends=True)
     head_to_annotated = map_head_lines_to_annotated_indices(a, b)
     annotated = full_file_annotated_diff(base_norm, head_norm)
-    return annotated, head_to_annotated
+    return PatchedContentResult(
+        annotated=annotated,
+        head_text=head,
+        head_to_annotated=head_to_annotated,
+    )
 
 
 def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> None:
-    """Set `patched_content` and per-comment `annotated_*` line fields.
+    """Set ``patched_content`` and per-comment ``annotated_*`` line fields.
+
+    Standalone utility for applying patches and computing annotated views
+    outside the main enrichment pipeline.  The canonical pipeline uses
+    :func:`github_api.enrich_dataset_with_code`, which performs this step
+    inline as phase 4.
+
+    For each file entry that has both ``base_content`` and ``patch``:
+
+    - ``patched_content`` — annotated diff view (``-``/``+`` prefix per line).
+    - ``annotated_start_line`` / ``annotated_end_line`` — 1-based line numbers
+      in ``patched_content`` for each review comment.
 
     Args:
         dataset:
@@ -202,22 +233,20 @@ def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> No
                     patch = file_entry["patch"]
                     if patch is None:
                         continue
-                    patched, head_to_annotated = compute_patched_content(
-                        base if isinstance(base, str) else "",
-                        patch if isinstance(patch, str) else "",
-                        path,
-                    )
-                    if patched is None or head_to_annotated is None:
+                    base_str = base if isinstance(base, str) else ""
+                    patch_str = patch if isinstance(patch, str) else ""
+                    result = compute_patched_content(base_str, patch_str, path)
+                    if result is None:
                         for comment in file_entry["comments"]:
                             comment["annotated_start_line"] = None
                             comment["annotated_end_line"] = None
                         continue
-                    file_entry["patched_content"] = patched
+                    file_entry["patched_content"] = result.annotated
                     for comment in file_entry["comments"]:
                         a_s, a_e = head_blob_range_to_annotated_1based(
                             comment.get("head_start_line"),
                             comment.get("head_end_line"),
-                            head_to_annotated,
+                            result.head_to_annotated,
                         )
                         comment["annotated_start_line"] = a_s
                         comment["annotated_end_line"] = a_e
