@@ -45,21 +45,52 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
         return None
 
 
+def _parse_content_length(response: aiohttp.ClientResponse) -> int | None:
+    raw = response.headers.get("Content-Length")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+async def _read_bytes_with_limit(
+    response: aiohttp.ClientResponse,
+    max_response_bytes: int,
+) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    total_bytes = 0
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        total_bytes += len(chunk)
+        if total_bytes > max_response_bytes:
+            response.close()
+            return b"", True
+        chunks.append(chunk)
+    return b"".join(chunks), False
+
+
 def _wait_retry_after_or_exponential(retry_state: RetryCallState) -> float:
-    exc = retry_state.outcome.exception()
+    exc = _retry_state_exception(retry_state)
     if isinstance(exc, RetryableHTTPStatusError) and exc.retry_after is not None:
         return min(float(exc.retry_after), config.HTTP_RETRY_AFTER_CAP_SECONDS)
     return _EXP_WAIT(retry_state)
 
 
 def _should_retry_http(exc: BaseException) -> bool:
-    if isinstance(exc, RetryableHTTPStatusError):
-        return True
-    if isinstance(exc, asyncio.TimeoutError):
-        return True
-    if isinstance(exc, aiohttp.ClientError):
-        return True
-    return False
+    return isinstance(
+        exc, (RetryableHTTPStatusError, asyncio.TimeoutError, aiohttp.ClientError)
+    )
+
+
+def _retry_state_exception(retry_state: RetryCallState) -> BaseException | None:
+    outcome = retry_state.outcome
+    if outcome is None:
+        return None
+    return outcome.exception()
 
 
 def _is_github_rest_url(url: str) -> bool:
@@ -126,6 +157,8 @@ async def async_http_get_bytes(
     *,
     semaphore: asyncio.Semaphore,
     headers: dict[str, str] | None = None,
+    timeout: aiohttp.ClientTimeout | None = None,
+    max_response_bytes: int | None = None,
 ) -> tuple[int, bytes]:
     """GET `url` and return `(status, body)`.
 
@@ -138,6 +171,11 @@ async def async_http_get_bytes(
             Concurrency limiter acquired per attempt.
         headers:
             Optional request headers.
+        timeout:
+            Optional per-request timeout override.
+        max_response_bytes:
+            Optional hard cap for response payload size in bytes. If exceeded,
+            this function returns status 413 with an explanatory body.
 
     Returns:
         Response status and raw body bytes.
@@ -147,14 +185,36 @@ async def async_http_get_bytes(
         status: int = 0
         body: bytes = b""
         async with semaphore:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, timeout=timeout) as response:
                 status = response.status
                 if status in config.HTTP_RETRY_STATUSES:
                     ra = _parse_retry_after(response)
                     await response.read()
                     raise RetryableHTTPStatusError(status, retry_after=ra)
-                body = await response.read()
                 hdrs = response.headers
+                if max_response_bytes is not None:
+                    declared_bytes = _parse_content_length(response)
+                    if (
+                        declared_bytes is not None
+                        and declared_bytes > max_response_bytes
+                    ):
+                        response.close()
+                        body = (
+                            "Response too large: content-length "
+                            f"{declared_bytes} exceeds cap {max_response_bytes}"
+                        ).encode("utf-8")
+                        return 413, body
+                    body, too_large = await _read_bytes_with_limit(
+                        response, max_response_bytes
+                    )
+                    if too_large:
+                        body = (
+                            "Response too large: streamed payload exceeded cap "
+                            f"{max_response_bytes}"
+                        ).encode("utf-8")
+                        return 413, body
+                else:
+                    body = await response.read()
         await _maybe_github_rate_limit_sleep(url, status, hdrs)
         return status, body
 
@@ -165,7 +225,7 @@ async def async_http_get_bytes(
         before_sleep=lambda retry_state: logger.debug(
             "HTTP retry %s after %s",
             retry_state.attempt_number,
-            retry_state.outcome.exception(),
+            _retry_state_exception(retry_state),
         ),
         reraise=True,
     ):
@@ -180,6 +240,7 @@ async def async_http_get_json(
     *,
     semaphore: asyncio.Semaphore,
     headers: dict[str, str] | None = None,
+    timeout: aiohttp.ClientTimeout | None = None,
 ) -> tuple[int, Any | None]:
     """GET `url` and parse JSON on HTTP 200.
 
@@ -192,6 +253,8 @@ async def async_http_get_json(
             Concurrency limiter.
         headers:
             Optional request headers.
+        timeout:
+            Optional per-request timeout override.
 
     Returns:
         `(status, parsed_json)` where `parsed_json` is only set for status 200.
@@ -202,7 +265,7 @@ async def async_http_get_json(
         parsed: Any | None = None
         hdrs: aiohttp.typedefs.LooseHeaders | None = None
         async with semaphore:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, timeout=timeout) as response:
                 status = response.status
                 text = await response.text()
                 if status in config.HTTP_RETRY_STATUSES:
@@ -224,7 +287,7 @@ async def async_http_get_json(
         before_sleep=lambda retry_state: logger.debug(
             "HTTP JSON retry %s after %s",
             retry_state.attempt_number,
-            retry_state.outcome.exception(),
+            _retry_state_exception(retry_state),
         ),
         reraise=True,
     ):
@@ -240,6 +303,7 @@ async def async_http_post_json(
     payload: Any,
     semaphore: asyncio.Semaphore,
     headers: dict[str, str] | None = None,
+    timeout: aiohttp.ClientTimeout | None = None,
 ) -> tuple[int, Any | None]:
     """POST `url` with a JSON-serialisable body and parse the JSON response on HTTP 200.
 
@@ -254,6 +318,8 @@ async def async_http_post_json(
             Concurrency limiter.
         headers:
             Optional request headers.
+        timeout:
+            Optional per-request timeout override.
 
     Returns:
         `(status, parsed_json)` where `parsed_json` is only set for status 200.
@@ -264,7 +330,9 @@ async def async_http_post_json(
         parsed: Any | None = None
         hdrs: aiohttp.typedefs.LooseHeaders | None = None
         async with semaphore:
-            async with session.post(url, json=payload, headers=headers) as response:
+            async with session.post(
+                url, json=payload, headers=headers, timeout=timeout
+            ) as response:
                 status = response.status
                 text = await response.text()
                 if status in config.HTTP_RETRY_STATUSES:
@@ -286,7 +354,7 @@ async def async_http_post_json(
         before_sleep=lambda retry_state: logger.debug(
             "HTTP POST JSON retry %s after %s",
             retry_state.attempt_number,
-            retry_state.outcome.exception(),
+            _retry_state_exception(retry_state),
         ),
         reraise=True,
     ):

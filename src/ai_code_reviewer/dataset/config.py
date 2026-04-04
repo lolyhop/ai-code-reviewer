@@ -32,8 +32,9 @@ GH_ARCHIVE_API_BASE: str = "https://data.gharchive.org"
 GITHUB_API_BASE: str = "https://api.github.com"
 GITHUB_GRAPHQL_API: str = "https://api.github.com/graphql"
 
-# Skip blobs larger than this when reading from zipballs (GitHub contenkts API parity).
-MAX_FILE_BYTES: int = 10_048_576
+# Skip blobs larger than this when reading from zipballs (GitHub contents API parity).
+FILE_MAX_BYTES: int = 1 * 1024 * 1024
+ZIPBALL_MAX_BYTES: int = 50 * 1024 * 1024
 
 # Source-root prefixes tried when resolving absolute Python imports.
 # The empty string represents the repository root itself; "src" covers the
@@ -54,6 +55,10 @@ INCOMING_DEP_MIN_SYMBOL_LENGTH: int = 3
 # positives).  Every changed file always participates — only its symbol set is
 # trimmed, never the file itself.
 INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 20
+
+# Maximum recursion depth when resolving package re-export chains for outgoing
+# dependencies (for example `pkg/__init__.py -> pkg/sub/__init__.py -> pkg/mod.py`).
+OUTGOING_REEXPORT_MAX_DEPTH: int = 4
 
 GH_ARCHIVE_CONCURRENCY: int = 5
 GITHUB_API_CONCURRENCY: int = 5
@@ -83,41 +88,30 @@ METADATA_FILES_COMMIT_KEY: str = "metadata_files"
 # review comments, capped at the number of commented files in that snapshot.
 INCLUDE_NO_COMMENT_FILES: bool = True
 
-HTTP_TIMEOUT_TOTAL: float = 600.0
-HTTP_TIMEOUT_CONNECT: float = 30.0
-HTTP_TIMEOUT_SOCK_CONNECT: float = 30.0
-HTTP_TIMEOUT_SOCK_READ: float = 300.0
+HTTP_JSON_TIMEOUT_TOTAL: float = 120.0
+HTTP_JSON_TIMEOUT_CONNECT: float = 20.0
+HTTP_JSON_TIMEOUT_SOCK_CONNECT: float = 20.0
+HTTP_JSON_TIMEOUT_SOCK_READ: float = 60.0
 
-HTTP_MAX_RETRY_ATTEMPTS: int = 10
+# Timeout profile for zipball downloads and large archive reads.
+HTTP_ZIP_TIMEOUT_TOTAL: float = 360.0
+HTTP_ZIP_TIMEOUT_CONNECT: float = 30.0
+HTTP_ZIP_TIMEOUT_SOCK_CONNECT: float = 30.0
+HTTP_ZIP_TIMEOUT_SOCK_READ: float = 180.0
+
+HTTP_MAX_RETRY_ATTEMPTS: int = 6
 HTTP_RETRY_STATUSES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 HTTP_RETRY_AFTER_CAP_SECONDS: float = 120.0
 HTTP_EXP_WAIT_MULTIPLIER: float = 1.0
 HTTP_EXP_WAIT_MIN_SECONDS: float = 2.0
-HTTP_EXP_WAIT_MAX_SECONDS: float = 120.0
+HTTP_EXP_WAIT_MAX_SECONDS: float = 60.0
 
 # Extra slots above semaphore concurrency for aiohttp connector limit (keep small).
 HTTP_CONNECTOR_LIMIT_BUFFER: int = 2
 
 
-def default_client_timeout() -> aiohttp.ClientTimeout:
-    """Return the default `aiohttp` timeout for long downloads and API calls.
-
-    Returns:
-        Configured `ClientTimeout` instance.
-    """
-    return aiohttp.ClientTimeout(
-        total=HTTP_TIMEOUT_TOTAL,
-        connect=HTTP_TIMEOUT_CONNECT,
-        sock_connect=HTTP_TIMEOUT_SOCK_CONNECT,
-        sock_read=HTTP_TIMEOUT_SOCK_READ,
-    )
-
-
 def tcp_connector_for_concurrency(concurrency: int) -> aiohttp.TCPConnector:
     """Return a TCP connector sized for at most `concurrency` concurrent requests.
-
-    The limit includes a small buffer so the pool is not tighter than the asyncio
-    semaphore used with the same session.
 
     Args:
         concurrency:

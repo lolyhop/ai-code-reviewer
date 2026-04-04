@@ -38,7 +38,7 @@ def full_file_annotated_diff(base_text: str, head_text: str) -> str:
             patch applier).
 
     Returns:
-        Patched file content
+        Annotated diff string with unchanged lines unmarked and edits prefixed with ``-``/``+``.
     """
     a = base_text.splitlines(keepends=True)
     b = head_text.splitlines(keepends=True)
@@ -203,18 +203,11 @@ def compute_patched_content(
 
 
 def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> None:
-    """Set `patched_content` and per-comment `annotated_*` line fields.
+    """Set ``patched_content`` and per-comment ``annotated_*`` line fields.
 
-    Standalone utility for applying patches and computing annotated views
-    outside the main enrichment pipeline.  The canonical pipeline uses
-    :func:`github_api.enrich_dataset_with_code`, which performs this step
-    inline as phase 4.
-
-    For each file entry that has both `base_content` and `patch`:
-
-    - `patched_content` — annotated diff view (`-`/`+` prefix per line).
-    - `annotated_start_line` / `annotated_end_line` — 1-based line numbers
-      in `patched_content` for each review comment.
+    Standalone utility for applying patches outside the main enrichment pipeline.
+    The canonical pipeline uses :func:`github_api.enrich_dataset_with_code`,
+    which performs this step inline as phase 4.
 
     Args:
         dataset:

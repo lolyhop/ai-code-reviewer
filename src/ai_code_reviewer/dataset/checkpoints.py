@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import tempfile
-from collections import defaultdict
 from collections.abc import Callable, MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,9 +24,7 @@ def dataset_to_plain_dict(obj: Any) -> Any:
         JSON-serializable structure with only `dict`, `list`, str, numbers, booleans,
         and `None`.
     """
-    if isinstance(obj, defaultdict):
-        return {k: dataset_to_plain_dict(v) for k, v in obj.items()}
-    if isinstance(obj, dict):
+    if isinstance(obj, dict):  # covers defaultdict subclass
         return {k: dataset_to_plain_dict(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [dataset_to_plain_dict(x) for x in obj]

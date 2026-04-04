@@ -54,9 +54,7 @@ def get_hunk_context_bounds(diff_hunk: str) -> tuple[int | None, int | None]:
             The diff_hunk to parse.
 
     Returns:
-        A tuple containing:
-            - The context start line
-            - The context end line
+        Context window ``(start_line, end_line)``, or ``(None, None)`` on parse failure.
     """
     if not diff_hunk:
         return None, None
@@ -307,34 +305,24 @@ def filter_dataset_by_top_snapshot_commits(
     dataset: MutableMapping[str, Any],
     snapshot_commits_to_keep: int,
 ) -> MutableMapping[str, Any]:
-    """Keep the top-N `(repo, PR, snapshot_commit)` triples globally by comment count.
+    """Keep the top-N ``(repo, PR, snapshot_commit)`` triples globally by comment count.
 
-    For every triple, counts all comments under that `snapshot_commit` (summed
-    across paths), sorts all triples by that count descending, takes the first
-    `snapshot_commits_to_keep` triples, and copies only those commits into a
-    new dataset with the same shape as `make_dataset()`.
-
-    When counts tie, ordering is by `repo_name`, then `pr_number`, then
-    `snapshot_commit` (all ascending) for reproducibility.
-
-    PRs with no kept commits are omitted, as are repos with no PRs left. If
-    `snapshot_commits_to_keep` is 0, returns an empty `make_dataset()` tree.
-
-    Paths with no comments are skipped (defensive; ingestion uses normalized keys).
+    Ties are broken by ``(repo_name, pr_number, snapshot_commit)`` ascending for
+    reproducibility.  PRs and repos with no retained commits are dropped.
 
     Args:
         dataset:
             Dataset to filter.
         snapshot_commits_to_keep:
-            Number of `(repo, PR, snapshot_commit)` triples to retain globally
-            (non-negative).
+            Number of ``(repo, PR, snapshot_commit)`` triples to retain (non-negative).
+            Pass 0 to return an empty dataset.
 
     Returns:
-        A new dataset with `defaultdict` structure matching `make_dataset()`.
+        New dataset with ``defaultdict`` structure matching ``make_dataset()``.
 
     Raises:
         ValueError:
-            If `snapshot_commits_to_keep` is negative.
+            If ``snapshot_commits_to_keep`` is negative.
     """
     if snapshot_commits_to_keep < 0:
         raise ValueError(
