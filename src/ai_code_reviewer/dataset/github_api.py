@@ -156,6 +156,69 @@ def _infer_zip_root_prefix(zf: zipfile.ZipFile) -> str | None:
     return f"{root_seg}/"
 
 
+def _build_repo_tree_string_from_zip_bytes(
+    zip_bytes: bytes,
+    root_label: str,
+) -> str:
+    """Build a deterministic tree-diagram string from zipball bytes.
+
+    Args:
+        zip_bytes:
+            Raw zip bytes for a snapshot commit.
+        root_label:
+            Label for the rendered root directory.
+
+    Returns:
+        Directory tree diagram (similar to Unix `tree`) rooted at `root_label`,
+        or an empty string when the archive cannot be parsed.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            root = _infer_zip_root_prefix(zf)
+            if not root:
+                return ""
+            paths: list[str] = []
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name = info.filename
+                if not name.startswith(root):
+                    continue
+                rel_path = normalize_repo_rel_path(name[len(root) :])
+                if rel_path is not None:
+                    paths.append(rel_path)
+    except zipfile.BadZipFile:
+        return ""
+    if not paths:
+        return ""
+
+    tree: dict[str, dict[str, Any]] = {}
+    for path in sorted(set(paths)):
+        node = tree
+        for part in path.split("/"):
+            node = node.setdefault(part, {})
+
+    lines: list[str] = [f"{root_label}/"]
+
+    def _render_subtree(node: dict[str, dict[str, Any]], prefix: str) -> None:
+        items = sorted(
+            node.items(),
+            key=lambda kv: (0 if kv[1] else 1, kv[0].lower(), kv[0]),
+        )
+        for idx, (name, child) in enumerate(items):
+            is_last = idx == len(items) - 1
+            connector = "└── " if is_last else "├── "
+            is_dir = bool(child)
+            suffix = "/" if is_dir else ""
+            lines.append(f"{prefix}{connector}{name}{suffix}")
+            if is_dir:
+                child_prefix = prefix + ("    " if is_last else "│   ")
+                _render_subtree(child, child_prefix)
+
+    _render_subtree(tree, "")
+    return "\n".join(lines)
+
+
 def _resolve_base_text_from_cache(
     base_cache: dict[str, str | None],
     path: str,
@@ -1070,7 +1133,7 @@ async def _enrich_one_repo(
         for snapshot_commit, path_map in pr_entry["commits"].items():
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
             for path in path_map.keys():
-                if path == config.METADATA_FILES_COMMIT_KEY:
+                if path in {"metadata_files", "file_tree"}:
                     continue
                 path_norm = normalize_repo_rel_path(path)
                 if path_norm is None:
@@ -1166,7 +1229,7 @@ async def _enrich_one_repo(
         for snapshot_commit in snapshot_commits:
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
             for path in list(pr_entry["commits"][snapshot_commit].keys()):
-                if path == config.METADATA_FILES_COMMIT_KEY:
+                if path in {"metadata_files", "file_tree"}:
                     continue
                 file_entry = pr_entry["commits"][snapshot_commit][path]
                 path_norm = normalize_repo_rel_path(path)
@@ -1208,6 +1271,8 @@ async def _enrich_one_repo(
     commit_to_zip_bytes: dict[str, bytes] = {}
     # snapshot_commit → inferred source-root prefixes (e.g. ("", "src"))
     commit_to_source_roots: dict[str, tuple[str, ...]] = {}
+    # snapshot_commit → newline-separated sorted repo file tree at head
+    commit_to_file_tree: dict[str, str] = {}
 
     async def _prefetch_snapshot_zip(
         snapshot_commit: str,
@@ -1246,6 +1311,9 @@ async def _enrich_one_repo(
                 commit_to_source_roots[_sc] = await asyncio.to_thread(
                     _infer_source_roots_from_zip_manifest, _pf_data
                 )
+                commit_to_file_tree[_sc] = await asyncio.to_thread(
+                    _build_repo_tree_string_from_zip_bytes, _pf_data, repo
+                )
             else:
                 logger.warning(
                     "Snapshot zip prefetch HTTP %s for %s @ %s; "
@@ -1254,6 +1322,13 @@ async def _enrich_one_repo(
                     repo_name,
                     _sc[:7],
                 )
+
+    for _pr_number in list(dataset[repo_name].keys()):
+        _pr_entry = dataset[repo_name][_pr_number]
+        for _snapshot_commit, _path_map in _pr_entry["commits"].items():
+            _tree_string = commit_to_file_tree.get(_snapshot_commit)
+            if _tree_string:
+                _path_map["file_tree"] = {"tree": _tree_string}
 
     # Phase 4+5: apply patches inline; collect outgoing dep candidates and
     # changed symbols for incoming-dependency search.
@@ -1278,7 +1353,7 @@ async def _enrich_one_repo(
         snapshot_init_paths: set[str] = set()
 
         for path, file_entry in path_map.items():
-            if path == config.METADATA_FILES_COMMIT_KEY:
+            if path in {"metadata_files", "file_tree"}:
                 continue
             base_str: str = file_entry.get("base_content") or ""
             patch_str: str = file_entry.get("patch") or ""
@@ -1527,7 +1602,7 @@ async def _enrich_one_repo(
                 return value
 
             for path, file_entry in path_map.items():
-                if path == config.METADATA_FILES_COMMIT_KEY:
+                if path in {"metadata_files", "file_tree"}:
                     continue
 
                 # ---- outgoing dependencies ---- #
@@ -1678,8 +1753,8 @@ async def _enrich_one_repo(
                 if isinstance(_entry, dict):
                     _entry.pop("_head_text", None)
 
-    # Phase 8: attach metadata files at the commit level under
-    # config.METADATA_FILES_COMMIT_KEY.  Content is an annotated diff when the
+    # Phase 8: attach metadata files at the commit level under "metadata_files".
+    # Content is an annotated diff when the
     # file changed between base and head; otherwise raw HEAD text.
 
     for pr_number in list(dataset[repo_name].keys()):
@@ -1700,7 +1775,7 @@ async def _enrich_one_repo(
                 else:
                     result[meta_path] = head_text
             if result:
-                path_map[config.METADATA_FILES_COMMIT_KEY] = result
+                path_map["metadata_files"] = result
 
 
 async def enrich_dataset_with_code(
@@ -1735,9 +1810,11 @@ async def enrich_dataset_with_code(
        changed file's module (or one of its package-init / source-root
        equivalents).  The import-link check eliminates cross-project false
        positives from common symbol names (e.g. `get_logger`, `create`).
-    8. Attach `metadata_files: {path: content}` at the commit level (under
-       `config.METADATA_FILES_COMMIT_KEY`).  Content is an annotated diff when
-       the file changed between base and head; otherwise raw HEAD text.
+    8. Attach `metadata_files: {path: content}` at the commit level.  Content
+       is an annotated diff when the file changed between base and head;
+       otherwise raw HEAD text.
+    9. Attach `file_tree: {"tree": "..."}` at the commit level, where `tree`
+       is a newline-separated sorted list of repository file paths at head.
 
     Repos are processed concurrently up to `config.GITHUB_API_CONCURRENCY`
     workers.

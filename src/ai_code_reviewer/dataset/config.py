@@ -80,10 +80,6 @@ METADATA_FILE_NAMES: list[str] = [
     "pyproject.toml",
 ]
 
-# Sentinel key stored inside the commit-level path_map to hold metadata file content.
-# This key must not be a valid repo-relative file path (no path separators, reserved name).
-METADATA_FILES_COMMIT_KEY: str = "metadata_files"
-
 # When True, each snapshot commit is augmented with changed .py files that have no
 # review comments, capped at the number of commented files in that snapshot.
 INCLUDE_NO_COMMENT_FILES: bool = True
