@@ -139,7 +139,16 @@ class ReviewPipeline:
 
 
 if __name__ == "__main__":
+    import argparse
     import os
+
+    parser = argparse.ArgumentParser(description="ReviewPipeline runner")
+    parser.add_argument(
+        "--infer", action="store_true", help="Run model inference on generated prompts"
+    )
+    parser.add_argument("--top-k", type=int, default=3, help="Retriever top_k")
+    parser.add_argument("--max-samples", type=int, default=None, help="Limit samples")
+    args = parser.parse_args()
 
     dataset_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "..", "raw_dataset.json"
@@ -147,7 +156,10 @@ if __name__ == "__main__":
     with open(dataset_path, "r") as f:
         raw_data = json.load(f)
 
-    pipeline = ReviewPipeline(retriever_type="heuristic", top_k=3)
+    if args.max_samples:
+        raw_data = raw_data[: args.max_samples]
+
+    pipeline = ReviewPipeline(retriever_type="heuristic", top_k=args.top_k)
     result = pipeline.run(raw_data)
 
     samples = result["samples"]
@@ -164,3 +176,19 @@ if __name__ == "__main__":
         if len(prompts[i]) > 2000:
             print("\n... [prompt truncated for display] ...")
         print()
+
+    if args.infer:
+        from src.ai_code_reviewer.models.inference import ReviewModel
+
+        model = ReviewModel()
+        model.load()
+        predictions = model.predict_batch(prompts)
+
+        for i, pred in enumerate(predictions):
+            print(f"\n{'=' * 80}")
+            print(f"Prediction {i} | {samples[i].repo} | {samples[i].path}")
+            print(f"Issues found: {len(pred.issues)}")
+            for j, issue in enumerate(pred.issues):
+                print(
+                    f"  [{j}] L{issue.line_start}-L{issue.line_end}: {issue.comment}"
+                )
