@@ -74,15 +74,9 @@ async def fetch_review_threads_for_pr(
             token is available.
 
     Returns:
-        A tuple `(ok, threads, meta)` where:
-
-        - `ok=True` — request succeeded; `threads` contains all accumulated
-          thread nodes (may be empty when a PR has no review threads);
-          `meta` is `{"title": str | None, "body": str | None,
-          "star_count": int | None}`.
-        - `ok=False` — HTTP error, GraphQL body error, or `pullRequest` is
-          null; `threads` is `[]` and `meta` is `{}`.  The caller
-          should drop this PR from the dataset.
+        ``(ok, threads, meta)`` — ``ok=False`` on HTTP/GraphQL error or missing PR
+        (caller should drop); otherwise ``threads`` holds all review-thread nodes and
+        ``meta`` holds ``{"title", "body", "star_count"}``.
 
     Raises:
         ValueError:

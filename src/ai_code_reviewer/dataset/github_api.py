@@ -7,7 +7,7 @@ import random
 import re
 import zipfile
 from collections import Counter, defaultdict
-from typing import Any, MutableMapping
+from typing import Any, Awaitable, Callable, MutableMapping
 
 import aiohttp
 from tqdm import tqdm
@@ -15,7 +15,12 @@ from tqdm import tqdm
 from ai_code_reviewer.dataset import config
 from ai_code_reviewer.dataset.dataset_utils import prune_empty_dataset
 from ai_code_reviewer.dataset.http import async_http_get_bytes, async_http_get_json
-from ai_code_reviewer.dataset.import_resolution import resolve_import_candidates
+from ai_code_reviewer.dataset.import_resolution import (
+    UsedImportFact,
+    resolve_import_candidates,
+    resolve_reexport_candidates_for_symbol,
+    resolve_used_import_facts,
+)
 from ai_code_reviewer.dataset.patches import (
     PatchedContentResult,
     compute_patched_content,
@@ -88,6 +93,38 @@ def _incoming_import_target_variants(
                 variants.add(f"{prefix}{p}")
 
     return frozenset(variants)
+
+
+def _prune_intermediate_init_paths(paths: set[str]) -> tuple[set[str], int]:
+    """Drop intermediate package ``__init__.py`` paths from outgoing candidates.
+
+    A package ``__init__.py`` is considered intermediate when there is at least
+    one resolved deeper dependency path under the same package directory.
+
+    Args:
+        paths:
+            Candidate dependency paths.
+
+    Returns:
+        Tuple of ``(pruned_paths, removed_count)``.
+    """
+    if not paths:
+        return set(), 0
+
+    kept: set[str] = set(paths)
+    removed = 0
+    for candidate in list(paths):
+        if not candidate.endswith("/__init__.py"):
+            continue
+        package_dir = candidate.removesuffix("/__init__.py")
+        package_prefix = f"{package_dir}/"
+        has_deeper_path = any(
+            other != candidate and other.startswith(package_prefix) for other in paths
+        )
+        if has_deeper_path and candidate in kept:
+            kept.remove(candidate)
+            removed += 1
+    return kept, removed
 
 
 def _infer_zip_root_prefix(zf: zipfile.ZipFile) -> str | None:
@@ -184,7 +221,7 @@ def _extract_files_from_zip_bytes(
             Repo-relative paths.
 
     Returns:
-        Dictionary mapping each path to content of file.
+        Mapping of each requested path to decoded text, or ``None`` if missing/unreadable.
     """
     out: dict[str, str | None] = {}
     try:
@@ -207,7 +244,7 @@ def _extract_files_from_zip_bytes(
                 if info.is_dir():
                     out[path] = None
                     continue
-                if info.file_size > config.MAX_FILE_BYTES:
+                if info.file_size > config.FILE_MAX_BYTES:
                     logger.warning(
                         "Skipping large file in zip %s (size=%s)",
                         path,
@@ -250,7 +287,7 @@ def _scan_metadata_in_zip_bytes(
 
     Returns:
         Dict mapping each discovered repo-relative path to its decoded text content.
-        Entries that exceed `config.MAX_FILE_BYTES` or cannot be decoded as UTF-8
+        Entries that exceed `config.FILE_MAX_BYTES` or cannot be decoded as UTF-8
         are silently skipped.
     """
     out: dict[str, str] = {}
@@ -266,7 +303,7 @@ def _scan_metadata_in_zip_bytes(
                 basename = name.split("/")[-1]
                 if basename not in metadata_names:
                     continue
-                if info.file_size > config.MAX_FILE_BYTES:
+                if info.file_size > config.FILE_MAX_BYTES:
                     logger.warning(
                         "Skipping large metadata file in zip %s (size=%s)",
                         name,
@@ -302,7 +339,7 @@ def _scan_symbol_usages_in_zip_bytes(
 
     A single compiled alternation regex is used so each `.py` file in the
     archive is read exactly once regardless of how many symbols are searched.
-    Files larger than :data:`config.MAX_FILE_BYTES` or that cannot be decoded
+    Files larger than :data:`config.FILE_MAX_BYTES` or that cannot be decoded
     as UTF-8 are silently skipped.
 
     Args:
@@ -342,7 +379,7 @@ def _scan_symbol_usages_in_zip_bytes(
                 repo_rel_norm = normalize_repo_rel_path(repo_rel)
                 if repo_rel_norm is None:
                     continue
-                if info.file_size > config.MAX_FILE_BYTES:
+                if info.file_size > config.FILE_MAX_BYTES:
                     logger.warning(
                         "Skipping large .py file in zip %s (size=%s) during symbol scan",
                         repo_rel_norm,
@@ -461,6 +498,94 @@ def _build_reexport_map(
     return {k: frozenset(v) for k, v in reexport.items()}
 
 
+async def _resolve_outgoing_fact_paths(
+    fact: UsedImportFact,
+    source_roots: tuple[str, ...],
+    get_content: Callable[[str], Awaitable[str | None]],
+    reexport_cache: dict[tuple[str, str], frozenset[str]],
+    max_depth: int,
+) -> frozenset[str]:
+    """Resolve concrete dependency paths for one used import fact.
+
+    Args:
+        fact:
+            Structured import usage fact from
+            :func:`resolve_used_import_facts`.
+        source_roots:
+            Source-root prefixes used by import resolution.
+        get_content:
+            Callback that returns raw file text by repo-relative path.
+        reexport_cache:
+            Memo cache keyed by ``(__init__.py path, exported symbol)``.
+        max_depth:
+            Maximum recursion depth for following re-export chains.
+
+    Returns:
+        Frozen set of resolved dependency paths.
+    """
+    start_paths = sorted(
+        {
+            p
+            for p in (normalize_repo_rel_path(path) for path in fact.candidate_paths)
+            if p is not None and p.endswith(".py")
+        }
+    )
+    if not start_paths:
+        return frozenset()
+
+    symbol = fact.imported_name if fact.import_kind == "from" else None
+    queue: list[tuple[str, int]] = [(path, 0) for path in start_paths]
+    visited: set[tuple[str, str | None]] = set()
+    resolved: set[str] = set()
+
+    while queue:
+        current_path, depth = queue.pop(0)
+        visit_key = (current_path, symbol)
+        if visit_key in visited:
+            continue
+        visited.add(visit_key)
+
+        current_content = await get_content(current_path)
+        if current_content is None:
+            continue
+
+        if not current_path.endswith("/__init__.py") or symbol is None:
+            resolved.add(current_path)
+            continue
+
+        if depth >= max_depth:
+            resolved.add(current_path)
+            continue
+
+        cache_key = (current_path, symbol)
+        next_paths = reexport_cache.get(cache_key)
+        if next_paths is None:
+            candidates, _ = resolve_reexport_candidates_for_symbol(
+                current_content,
+                current_path,
+                symbol,
+                source_roots,
+            )
+            next_norm: set[str] = {
+                p
+                for p in (
+                    normalize_repo_rel_path(candidate) for candidate in candidates
+                )
+                if p is not None and p.endswith(".py")
+            }
+            next_paths = frozenset(next_norm)
+            reexport_cache[cache_key] = next_paths
+
+        if not next_paths:
+            resolved.add(current_path)
+            continue
+
+        for nxt in next_paths:
+            queue.append((nxt, depth + 1))
+
+    return frozenset(resolved)
+
+
 async def fetch_paths_from_zipball(
     owner: str,
     repo: str,
@@ -489,13 +614,21 @@ async def fetch_paths_from_zipball(
             Request headers.
 
     Returns:
-        A tuple containing:
-            - HTTP status code
-            - Dictionary mapping each path to content of file.
+        ``(status, {path: content | None})`` for each requested path.
     """
     url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{base_commit}"
     status, data = await async_http_get_bytes(
-        session, url, semaphore=semaphore, headers=headers
+        session,
+        url,
+        semaphore=semaphore,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(
+            total=config.HTTP_ZIP_TIMEOUT_TOTAL,
+            connect=config.HTTP_ZIP_TIMEOUT_CONNECT,
+            sock_connect=config.HTTP_ZIP_TIMEOUT_SOCK_CONNECT,
+            sock_read=config.HTTP_ZIP_TIMEOUT_SOCK_READ,
+        ),
+        max_response_bytes=config.ZIPBALL_MAX_BYTES,
     )
     if status != 200:
         text = data.decode("utf-8", errors="replace")[:400]
@@ -570,7 +703,17 @@ async def fetch_paths_and_metadata_from_zipball(
     """
     url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{commit}"
     status, data = await async_http_get_bytes(
-        session, url, semaphore=semaphore, headers=headers
+        session,
+        url,
+        semaphore=semaphore,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(
+            total=config.HTTP_ZIP_TIMEOUT_TOTAL,
+            connect=config.HTTP_ZIP_TIMEOUT_CONNECT,
+            sock_connect=config.HTTP_ZIP_TIMEOUT_SOCK_CONNECT,
+            sock_read=config.HTTP_ZIP_TIMEOUT_SOCK_READ,
+        ),
+        max_response_bytes=config.ZIPBALL_MAX_BYTES,
     )
     if status != 200:
         text = data.decode("utf-8", errors="replace")[:400]
@@ -641,7 +784,16 @@ async def fetch_compare_patches(
         f"{base_commit}...{head_commit}"
     )
     status, data = await async_http_get_json(
-        session, url, semaphore=semaphore, headers=headers
+        session,
+        url,
+        semaphore=semaphore,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(
+            total=config.HTTP_JSON_TIMEOUT_TOTAL,
+            connect=config.HTTP_JSON_TIMEOUT_CONNECT,
+            sock_connect=config.HTTP_JSON_TIMEOUT_SOCK_CONNECT,
+            sock_read=config.HTTP_JSON_TIMEOUT_SOCK_READ,
+        ),
     )
     if status == 404:
         logger.warning(
@@ -1043,11 +1195,8 @@ async def _enrich_one_repo(
                     file_entry["base_content"] = base_text
                     file_entry["patch"] = patch
 
-    # ------------------------------------------------------------------ #
-    # Pre-Phase 4: collect snapshot commits, download their zipballs,    #
-    # and infer per-commit Python source roots from the zip manifest.    #
-    # Caching the raw bytes here avoids a second download in Phase 6.   #
-    # ------------------------------------------------------------------ #
+    # Pre-Phase 4: prefetch snapshot zipballs and infer per-commit source roots.
+    # Raw bytes are cached here to avoid a second download in Phase 6.
 
     # Collect the full set of snapshot commits across every PR.
     all_snapshot_commits: set[str] = set()
@@ -1065,7 +1214,17 @@ async def _enrich_one_repo(
     ) -> tuple[str, int, bytes]:
         url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{snapshot_commit}"
         status, data = await async_http_get_bytes(
-            session, url, semaphore=semaphore, headers=headers
+            session,
+            url,
+            semaphore=semaphore,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(
+                total=config.HTTP_ZIP_TIMEOUT_TOTAL,
+                connect=config.HTTP_ZIP_TIMEOUT_CONNECT,
+                sock_connect=config.HTTP_ZIP_TIMEOUT_SOCK_CONNECT,
+                sock_read=config.HTTP_ZIP_TIMEOUT_SOCK_READ,
+            ),
+            max_response_bytes=config.ZIPBALL_MAX_BYTES,
         )
         return snapshot_commit, status, data
 
@@ -1084,8 +1243,8 @@ async def _enrich_one_repo(
             _sc, _pf_status, _pf_data = _prefetch_res
             if _pf_status == 200:
                 commit_to_zip_bytes[_sc] = _pf_data
-                commit_to_source_roots[_sc] = _infer_source_roots_from_zip_manifest(
-                    _pf_data
+                commit_to_source_roots[_sc] = await asyncio.to_thread(
+                    _infer_source_roots_from_zip_manifest, _pf_data
                 )
             else:
                 logger.warning(
@@ -1096,131 +1255,156 @@ async def _enrich_one_repo(
                     _sc[:7],
                 )
 
-    # ------------------------------------------------------------------ #
-    # Phase 4 + 5: apply patches inline; collect dependency candidates     #
-    # and changed symbols for incoming-dependency search.                  #
-    # ------------------------------------------------------------------ #
-    # Outgoing dep candidates and changed symbols are stored directly on
-    # each file_entry under temporary keys ("_dep_candidates",
-    # "_changed_symbols") so the association is always 1-to-1 with the
-    # entry object (avoids (commit, path) key collisions across PRs).
-    # snapshot_commit → union of all candidates / symbols across files
+    # Phase 4+5: apply patches inline; collect outgoing dep candidates and
+    # changed symbols for incoming-dependency search.
+    # Candidates/symbols are stored on file_entry under temporary keys
+    # ("_dep_candidates", "_changed_symbols") to avoid (commit, path) collisions
+    # across PRs; commit-level unions are collected in the dicts below.
     commit_to_dep_candidates: defaultdict[str, set[str]] = defaultdict(set)
-    # snapshot_commit → union of changed symbol names across all .py files
     commit_to_changed_symbols: defaultdict[str, set[str]] = defaultdict(set)
-    # snapshot_commit → __init__.py paths for all enclosing packages of changed
-    # .py files; extracted in Phase 6 for the re-export map in Phase 7.
+    # __init__.py paths for all enclosing packages of changed .py files;
+    # used in Phase 6 to build the re-export map for Phase 7.
     commit_to_init_paths: defaultdict[str, set[str]] = defaultdict(set)
 
-    for pr_number in list(dataset[repo_name].keys()):
-        pr_entry = dataset[repo_name][pr_number]
-        for snapshot_commit, path_map in pr_entry["commits"].items():
-            for path, file_entry in path_map.items():
-                if path == config.METADATA_FILES_COMMIT_KEY:
-                    continue
-                base_str: str = file_entry.get("base_content") or ""
-                patch_str: str = file_entry.get("patch") or ""
-                if not patch_str:
-                    continue
+    def _phase45_process_snapshot(
+        snapshot_commit: str,
+        path_map: MutableMapping[str, Any],
+    ) -> tuple[str, set[str], set[str], set[str]]:
+        _commit_source_roots = commit_to_source_roots.get(
+            snapshot_commit, config.IMPORT_SOURCE_ROOTS
+        )
+        snapshot_dep_candidates: set[str] = set()
+        snapshot_changed_symbols: set[str] = set()
+        snapshot_init_paths: set[str] = set()
 
-                result: PatchedContentResult | None = compute_patched_content(
-                    base_str, patch_str, path
-                )
-                if result is None:
-                    for comment in file_entry.get("comments", []):
-                        comment["annotated_start_line"] = None
-                        comment["annotated_end_line"] = None
-                    continue
+        for path, file_entry in path_map.items():
+            if path == config.METADATA_FILES_COMMIT_KEY:
+                continue
+            base_str: str = file_entry.get("base_content") or ""
+            patch_str: str = file_entry.get("patch") or ""
+            if not patch_str:
+                continue
 
-                file_entry["patched_content"] = result.annotated
+            result: PatchedContentResult | None = compute_patched_content(
+                base_str, patch_str, path
+            )
+            if result is None:
                 for comment in file_entry.get("comments", []):
-                    a_s, a_e = head_blob_range_to_annotated_1based(
-                        comment.get("head_start_line"),
-                        comment.get("head_end_line"),
-                        result.head_to_annotated,
-                    )
-                    comment["annotated_start_line"] = a_s
-                    comment["annotated_end_line"] = a_e
+                    comment["annotated_start_line"] = None
+                    comment["annotated_end_line"] = None
+                continue
 
-                if not path.endswith(".py"):
-                    continue
-
-                _commit_source_roots = commit_to_source_roots.get(
-                    snapshot_commit, config.IMPORT_SOURCE_ROOTS
+            file_entry["patched_content"] = result.annotated
+            file_entry["_head_text"] = result.head_text
+            for comment in file_entry.get("comments", []):
+                a_s, a_e = head_blob_range_to_annotated_1based(
+                    comment.get("head_start_line"),
+                    comment.get("head_end_line"),
+                    result.head_to_annotated,
                 )
-                candidates, unresolvable = resolve_import_candidates(
+                comment["annotated_start_line"] = a_s
+                comment["annotated_end_line"] = a_e
+
+            if not path.endswith(".py"):
+                continue
+
+            used_facts, used_unresolvable = resolve_used_import_facts(
+                result.head_text, path, _commit_source_roots
+            )
+            if used_unresolvable:
+                logger.debug(
+                    "Unresolvable used-import statements in %s: %d",
+                    path,
+                    used_unresolvable,
+                )
+            used_candidates = {
+                cand
+                for fact in used_facts
+                for cand in fact.candidate_paths
+                if cand.endswith(".py") and cand != path
+            }
+            if used_facts:
+                file_entry["_dep_usage_facts"] = used_facts
+            if used_candidates:
+                file_entry["_dep_candidates"] = used_candidates
+                snapshot_dep_candidates |= used_candidates
+            elif used_unresolvable > 0:
+                broad_candidates, unresolvable = resolve_import_candidates(
                     result.head_text, path, _commit_source_roots
                 )
                 if unresolvable:
                     logger.debug(
-                        "Unresolvable import statements in %s: %d",
+                        "Unresolvable fallback import statements in %s: %d",
                         path,
                         unresolvable,
                     )
-                candidates = {c for c in candidates if c.endswith(".py") and c != path}
-                if candidates:
-                    file_entry["_dep_candidates"] = candidates
-                    # Candidates that also appear in path_map (patched in this
-                    # snapshot) are resolved via patched_content in Phase 7.
-                    # We still add all candidates here so a zipball fallback is
-                    # available when patched_content is absent for a candidate
-                    # (e.g. patch application failed for that file).
-                    commit_to_dep_candidates[snapshot_commit] |= candidates
+                broad_candidates = {
+                    c for c in broad_candidates if c.endswith(".py") and c != path
+                }
+                if broad_candidates:
+                    file_entry["_dep_candidates"] = broad_candidates
+                    snapshot_dep_candidates |= broad_candidates
 
-                # Collect changed symbols for incoming-dependency search.
-                # Only named definitions (functions, methods, classes) are
-                # included; pure module-level procedural changes are skipped.
-                changed_lines = extract_patch_head_line_numbers(patch_str)
-                raw_symbols = extract_changed_symbols(
-                    result.head_text,
-                    changed_lines,
-                    min_name_length=config.INCOMING_DEP_MIN_SYMBOL_LENGTH,
+            changed_lines = extract_patch_head_line_numbers(patch_str)
+            raw_symbols = extract_changed_symbols(
+                result.head_text,
+                changed_lines,
+                min_name_length=config.INCOMING_DEP_MIN_SYMBOL_LENGTH,
+            )
+            if raw_symbols:
+                capped: frozenset[str] = frozenset(
+                    sorted(raw_symbols, key=len, reverse=True)[
+                        : config.INCOMING_DEP_MAX_SYMBOLS_PER_FILE
+                    ]
                 )
-                if raw_symbols:
-                    # Cap per-file to the longest (most specific) names.
-                    capped: frozenset[str] = frozenset(
-                        sorted(raw_symbols, key=len, reverse=True)[
-                            : config.INCOMING_DEP_MAX_SYMBOLS_PER_FILE
-                        ]
-                    )
-                    file_entry["_changed_symbols"] = capped
-                    commit_to_changed_symbols[snapshot_commit] |= capped
+                file_entry["_changed_symbols"] = capped
+                snapshot_changed_symbols |= set(capped)
 
-                # Collect __init__.py paths for every enclosing package of
-                # this changed file.  These are used in Phase 7 to detect
-                # callers that access the changed module via re-exports in an
-                # intermediate __init__.py (e.g. `from pkg import Foo` where
-                # Foo is defined in `pkg/mod.py` and re-exported by
-                # `pkg/__init__.py`).
-                _path_parts = path.rstrip("/").split("/")[:-1]
-                for _depth in range(1, len(_path_parts) + 1):
-                    _init_path = "/".join(_path_parts[:_depth]) + "/__init__.py"
-                    commit_to_init_paths[snapshot_commit].add(_init_path)
+            _path_parts = path.rstrip("/").split("/")[:-1]
+            for _depth in range(1, len(_path_parts) + 1):
+                _init_path = "/".join(_path_parts[:_depth]) + "/__init__.py"
+                snapshot_init_paths.add(_init_path)
 
-    # ------------------------------------------------------------------ #
-    # Phase 6: extract content from pre-fetched snapshot zipballs.       #
-    # Zip bytes were cached in the Pre-Phase 4 step; each entry is       #
-    # consumed (popped) here and freed after extraction so peak memory   #
-    # usage spans only the extraction window, not the full pipeline run. #
-    # ------------------------------------------------------------------ #
+        return (
+            snapshot_commit,
+            snapshot_dep_candidates,
+            snapshot_changed_symbols,
+            snapshot_init_paths,
+        )
+
+    phase45_tasks = [
+        asyncio.to_thread(_phase45_process_snapshot, snapshot_commit, path_map)
+        for pr_number in list(dataset[repo_name].keys())
+        for snapshot_commit, path_map in dataset[repo_name][pr_number][
+            "commits"
+        ].items()
+    ]
+    phase45_results = await asyncio.gather(*phase45_tasks)
+    for (
+        snapshot_commit,
+        snapshot_dep_candidates,
+        snapshot_changed_symbols,
+        snapshot_init_paths,
+    ) in phase45_results:
+        if snapshot_dep_candidates:
+            commit_to_dep_candidates[snapshot_commit] |= snapshot_dep_candidates
+        if snapshot_changed_symbols:
+            commit_to_changed_symbols[snapshot_commit] |= snapshot_changed_symbols
+        if snapshot_init_paths:
+            commit_to_init_paths[snapshot_commit] |= snapshot_init_paths
+
+    # Phase 6: extract content from pre-fetched snapshot zipballs.
+    # Keep zip bytes available for lazy on-demand extraction in Phase 7 when
+    # recursive re-export resolution discovers additional paths.
     dep_commit_to_content: dict[str, dict[str, str | None]] = {}
-    # snapshot_commit → {repo_rel_path: content}  (metadata HEAD content)
     snapshot_metadata_head: dict[str, dict[str, str]] = {}
-    # snapshot_commit → {repo_rel_path: content}  (.py files using any changed symbol)
     dep_commit_to_usage: dict[str, dict[str, str | None]] = {}
-
-    # snapshot_commit → {__init__.py path: content} for re-export map
     commit_to_init_content: dict[str, dict[str, str]] = {}
 
     def _make_zip_extractor(
         snapshot_commit: str,
     ) -> tuple[str, Any]:
-        """Build a zero-argument extractor closure that captures the zip bytes.
-
-        The bytes are popped from `commit_to_zip_bytes` here (in the main
-        async loop) so extraction is thread-safe — each closure owns its data.
-        """
-        zip_data = commit_to_zip_bytes.pop(snapshot_commit, None)
+        zip_data = commit_to_zip_bytes.get(snapshot_commit)
         paths_needed = commit_to_dep_candidates.get(snapshot_commit, set())
         snapshot_symbols = frozenset(
             commit_to_changed_symbols.get(snapshot_commit, set())
@@ -1290,16 +1474,14 @@ async def _enrich_one_repo(
             dep_commit_to_usage[snapshot_commit] = usage_mapping
             commit_to_init_content[snapshot_commit] = init_mapping
 
-    # ------------------------------------------------------------------ #
-    # Phase 7: attach outgoing_dependencies, incoming_dependencies, and   #
-    # log per-repo metrics.                                               #
-    # ------------------------------------------------------------------ #
+    # Phase 7: attach outgoing_dependencies and incoming_dependencies.
 
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
         for snapshot_commit, path_map in pr_entry["commits"].items():
             content_map = dep_commit_to_content.get(snapshot_commit, {})
             usage_map = dep_commit_to_usage.get(snapshot_commit, {})
+            snapshot_zip_bytes = commit_to_zip_bytes.get(snapshot_commit)
             # Use per-commit inferred source roots for both outgoing candidate
             # filtering and incoming dep import-link validation.
             snapshot_source_roots = commit_to_source_roots.get(
@@ -1313,28 +1495,106 @@ async def _enrich_one_repo(
                 commit_to_init_content.get(snapshot_commit, {}),
                 snapshot_source_roots,
             )
+            outgoing_imports_analyzed = 0
+            outgoing_reexport_resolved = 0
+            outgoing_resolution_fallbacks = 0
+            outgoing_init_pruned = 0
+            reexport_cache: dict[tuple[str, str], frozenset[str]] = {}
+
+            async def _get_raw_dep_content(dep_path: str) -> str | None:
+                dep_norm = normalize_repo_rel_path(dep_path)
+                if dep_norm is None:
+                    return None
+
+                dep_entry = path_map.get(dep_norm)
+                if dep_entry is not None:
+                    head_text = dep_entry.get("_head_text")
+                    if isinstance(head_text, str):
+                        return head_text
+
+                if dep_norm in content_map:
+                    return content_map[dep_norm]
+
+                if snapshot_zip_bytes is None:
+                    content_map[dep_norm] = None
+                    return None
+
+                extracted = await asyncio.to_thread(
+                    _extract_files_from_zip_bytes, snapshot_zip_bytes, {dep_norm}
+                )
+                value = extracted.get(dep_norm)
+                content_map[dep_norm] = value
+                return value
+
             for path, file_entry in path_map.items():
                 if path == config.METADATA_FILES_COMMIT_KEY:
                     continue
 
-                # ---- outgoing dependencies (renamed from "dependencies") ---- #
+                # ---- outgoing dependencies ---- #
                 candidates = file_entry.pop("_dep_candidates", None)
-                if candidates:
+                usage_facts = file_entry.pop("_dep_usage_facts", None)
+                candidate_set: set[str] = set()
+                if usage_facts:
+                    for fact in usage_facts:
+                        outgoing_imports_analyzed += 1
+                        resolved = await _resolve_outgoing_fact_paths(
+                            fact,
+                            snapshot_source_roots,
+                            _get_raw_dep_content,
+                            reexport_cache,
+                            config.OUTGOING_REEXPORT_MAX_DEPTH,
+                        )
+                        if resolved:
+                            if fact.imported_name is not None and any(
+                                not p.endswith("/__init__.py") for p in resolved
+                            ):
+                                outgoing_reexport_resolved += 1
+                            candidate_set |= set(resolved)
+                        else:
+                            outgoing_resolution_fallbacks += 1
+                            # Per-fact fallback: keep direct import candidates so
+                            # one successfully resolved import does not suppress
+                            # other unresolved imports in the same file.
+                            fact_fallback: set[str] = {
+                                candidate_norm
+                                for candidate_norm in (
+                                    normalize_repo_rel_path(candidate)
+                                    for candidate in fact.candidate_paths
+                                )
+                                if (
+                                    candidate_norm is not None
+                                    and candidate_norm.endswith(".py")
+                                    and candidate_norm != path
+                                )
+                            }
+                            candidate_set |= fact_fallback
+
+                # Keep broad fallback behavior when precise usage facts are absent.
+                if not usage_facts and candidates:
+                    candidate_set |= set(candidates)
+                # Safety net: if precise path resolution produced nothing, retain
+                # broad candidates collected in Phase 5.
+                elif usage_facts and not candidate_set and candidates:
+                    candidate_set |= set(candidates)
+
+                candidate_set, removed_init_count = _prune_intermediate_init_paths(
+                    candidate_set
+                )
+                outgoing_init_pruned += removed_init_count
+
+                candidate_paths = sorted(candidate_set)
+                if candidate_paths:
                     outgoing: dict[str, str] = {}
-                    for candidate in sorted(candidates):
-                        # Priority 1: annotated patched content when the
-                        # dependency file was itself changed in the same
-                        # snapshot commit.
+                    for candidate in candidate_paths:
+                        # Priority 1: annotated patched content (dep changed in same snapshot)
                         dep_entry = path_map.get(candidate)
                         if dep_entry is not None:
                             patched = dep_entry.get("patched_content")
                             if patched is not None:
                                 outgoing[candidate] = patched
                                 continue
-                        # Priority 2: raw HEAD content from the snapshot zipball
-                        # (covers unchanged dependencies and patched deps whose
-                        # patch application failed).
-                        dep_content = content_map.get(candidate)
+                        # Priority 2: raw HEAD content from snapshot zipball
+                        dep_content = await _get_raw_dep_content(candidate)
                         if dep_content is not None:
                             outgoing[candidate] = dep_content
                     if outgoing:
@@ -1381,12 +1641,10 @@ async def _enrich_one_repo(
                             dep_content, dep_path, snapshot_source_roots
                         )
                         if dep_imports & target_variants:
-                            # Prefer annotated patched content when the
-                            # incoming dep file was itself changed in this
-                            # snapshot (mirrors outgoing dep priority logic).
-                            # Pattern matching and import validation above
-                            # intentionally stay on raw text so the AST
-                            # parser is not confused by +/- line prefixes.
+                            # Prefer annotated patched content when incoming dep was
+                            # also changed in this snapshot (mirrors outgoing priority).
+                            # Pattern matching/import validation use raw text so the
+                            # AST parser is not confused by +/- line prefixes.
                             dep_patched_entry = path_map.get(dep_path)
                             if dep_patched_entry is not None:
                                 dep_patched = dep_patched_entry.get("patched_content")
@@ -1397,17 +1655,32 @@ async def _enrich_one_repo(
                     if incoming:
                         file_entry["incoming_dependencies"] = incoming
 
-    # ------------------------------------------------------------------ #
-    # Phase 8: attach metadata files at the commit level.                #
-    # For each snapshot commit, look up metadata file content from the   #
-    # snapshot zipball (HEAD).  When a metadata file was also changed    #
-    # between base and head (present in cmap with a patch), produce an   #
-    # annotated diff using full_file_annotated_diff; otherwise store the #
-    # raw HEAD text.  Results are written under the sentinel key         #
-    # config.METADATA_FILES_COMMIT_KEY directly in the path_map so they #
-    # travel with the commit-level data without conflicting with file    #
-    # path keys.                                                         #
-    # ------------------------------------------------------------------ #
+            if (
+                outgoing_imports_analyzed > 0
+                or outgoing_reexport_resolved > 0
+                or outgoing_resolution_fallbacks > 0
+                or outgoing_init_pruned > 0
+            ):
+                logger.debug(
+                    "Outgoing dependency resolution stats for %s @ %s: "
+                    "imports_analyzed=%d, reexports_resolved=%d, "
+                    "fallbacks=%d, init_pruned=%d",
+                    repo_name,
+                    snapshot_commit[:7],
+                    outgoing_imports_analyzed,
+                    outgoing_reexport_resolved,
+                    outgoing_resolution_fallbacks,
+                    outgoing_init_pruned,
+                )
+
+            # Drop transient parse helper content after dependency attachment.
+            for _entry in path_map.values():
+                if isinstance(_entry, dict):
+                    _entry.pop("_head_text", None)
+
+    # Phase 8: attach metadata files at the commit level under
+    # config.METADATA_FILES_COMMIT_KEY.  Content is an annotated diff when the
+    # file changed between base and head; otherwise raw HEAD text.
 
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
