@@ -8,17 +8,18 @@ import aiohttp
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
-_DATA_ROOT: Path = (
+DATA_ROOT: Path = (
     Path(os.environ["DATA_DIR"]).resolve()
     if os.environ.get("DATA_DIR")
     else PROJECT_ROOT / "data"
 )
 
-CHECKPOINT_DIR: Path = _DATA_ROOT / "checkpoints"
+CHECKPOINT_DIR: Path = DATA_ROOT / "checkpoints"
+DATASET_CHECKPOINT_RAW_PATH: Path = CHECKPOINT_DIR / "checkpoint_raw.json.zst"
+DATASET_CHECKPOINT_FINAL_PATH: Path = CHECKPOINT_DIR / "checkpoint_final.json.zst"
 
-DATASET_RAW_PATH: Path = CHECKPOINT_DIR / "dataset_raw.json.gz"
-DATASET_FILTERED_PATH: Path = CHECKPOINT_DIR / "filtered.json.gz"
-DATASET_FINAL_PATH: Path = CHECKPOINT_DIR / "final.json.gz"
+EXPORTS_DIR: Path = DATA_ROOT / "exports"
+DATASET_PATH: Path = EXPORTS_DIR / "dataset.parquet"
 
 # Dataset download range
 RANGE_START = datetime(2022, 1, 3, 0)
