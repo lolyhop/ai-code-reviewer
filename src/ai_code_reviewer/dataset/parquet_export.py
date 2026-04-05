@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +90,7 @@ def build_files_list_rows(
             repo_star_count = pr_entry.get("repo_star_count")
             for commit_sha, path_map in pr_entry["commits"].items():
                 commit_metadata_files = path_content_dict_to_rows(
-                    _as_path_content_dict(path_map.get("metadata_files"))
+                    _as_path_content_dict(path_map.get("metadata_files")),
                 )
                 file_tree_obj = path_map.get("file_tree") or {}
                 commit_file_tree = file_tree_obj.get("tree")
@@ -118,10 +119,10 @@ def build_files_list_rows(
                     seen_keys.add(dedupe_key)
 
                     out_raw = _as_path_content_dict(
-                        file_entry.get("outgoing_dependencies")
+                        file_entry.get("outgoing_dependencies"),
                     )
                     in_raw = _as_path_content_dict(
-                        file_entry.get("incoming_dependencies")
+                        file_entry.get("incoming_dependencies"),
                     )
 
                     row: dict[str, Any] = {
@@ -142,7 +143,7 @@ def build_files_list_rows(
                                 "body": c.get("body"),
                                 "is_resolved": c.get("is_resolved"),
                                 "annotated_start_line": c.get(
-                                    "annotated_start_line"
+                                    "annotated_start_line",
                                 ),
                                 "annotated_end_line": c.get("annotated_end_line"),
                             }

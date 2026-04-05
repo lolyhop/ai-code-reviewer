@@ -1,29 +1,27 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
 
+
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
-DATA_ROOT: Path = (
-    Path(os.environ["DATA_DIR"]).resolve()
-    if os.environ.get("DATA_DIR")
-    else PROJECT_ROOT / "data"
-)
+DATA_ROOT: Path = Path(os.environ["DATA_DIR"]).resolve() if os.environ.get("DATA_DIR") else PROJECT_ROOT / "data"
 
 CHECKPOINT_DIR: Path = DATA_ROOT / "checkpoints"
 DATASET_CHECKPOINT_RAW_PATH: Path = CHECKPOINT_DIR / "checkpoint_raw.json.zst"
+DATASET_CHECKPOINT_PR_ENRICHED_PATH: Path = CHECKPOINT_DIR / "checkpoint_pr_enriched.json.zst"
 DATASET_CHECKPOINT_FINAL_PATH: Path = CHECKPOINT_DIR / "checkpoint_final.json.zst"
 
 EXPORTS_DIR: Path = DATA_ROOT / "exports"
 DATASET_PATH: Path = EXPORTS_DIR / "dataset.parquet"
 
 # Dataset download range
-RANGE_START = datetime(2022, 1, 3, 0)
-RANGE_END = datetime(2022, 1, 3, 0)
+RANGE_START = datetime(2022, 1, 1, 0, tzinfo=timezone.utc)
+RANGE_END = datetime(2022, 1, 10, 0, tzinfo=timezone.utc)
 
 # Numbers of snapshot commits to keep
 # Should be aligned with GitHub API rate limit
@@ -34,8 +32,8 @@ GITHUB_API_BASE: str = "https://api.github.com"
 GITHUB_GRAPHQL_API: str = "https://api.github.com/graphql"
 
 # Skip blobs larger than this when reading from zipballs (GitHub contents API parity).
-FILE_MAX_BYTES: int = 1 * 1024 * 1024
-ZIPBALL_MAX_BYTES: int = 50 * 1024 * 1024
+FILE_MAX_BYTES: int = 5 * 1024 * 1024
+ZIPBALL_MAX_BYTES: int = 100 * 1024 * 1024
 
 # Source-root prefixes tried when resolving absolute Python imports.
 # The empty string represents the repository root itself; "src" covers the
@@ -55,7 +53,7 @@ INCOMING_DEP_MIN_SYMBOL_LENGTH: int = 3
 # the longest names are kept (more specific identifiers produce fewer false
 # positives).  Every changed file always participates — only its symbol set is
 # trimmed, never the file itself.
-INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 20
+INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 30
 
 # Maximum recursion depth when resolving package re-export chains for outgoing
 # dependencies (for example `pkg/__init__.py -> pkg/sub/__init__.py -> pkg/mod.py`).

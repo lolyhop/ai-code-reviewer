@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any, MutableMapping
+from typing import Any
 
 from whatthepatch import apply_diff, parse_patch
 from whatthepatch.exceptions import HunkApplyException
+
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ def map_head_lines_to_annotated_indices(
     head_to_annotated = [0] * len(head_lines)
     annotated_idx = 0
     for tag, i1, i2, j1, j2 in SequenceMatcher(
-        None, base_lines, head_lines
+        None, base_lines, head_lines,
     ).get_opcodes():
         if tag == "equal":
             for j in range(j1, j2):
@@ -213,12 +215,12 @@ def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> No
         dataset:
             Nested mapping produced by the EDA pipeline after base/patch enrichment.
     """
-    for _, pr_map in dataset.items():
-        for _pr_number, pr_entry in pr_map.items():
+    for pr_map in dataset.values():
+        for pr_entry in pr_map.values():
             commits = pr_entry.get("commits")
             if not commits:
                 continue
-            for _snapshot, path_map in commits.items():
+            for path_map in commits.values():
                 for path, file_entry in path_map.items():
                     if "base_content" not in file_entry or "patch" not in file_entry:
                         continue

@@ -217,6 +217,7 @@ data/checkpoints/
 *.xls
 *.xlsx
 *.gz
+*.zst
 *.tar
 
 # Mac OS files

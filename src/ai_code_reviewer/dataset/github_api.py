@@ -7,31 +7,20 @@ import random
 import re
 import zipfile
 from collections import Counter, defaultdict
-from typing import Any, Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, MutableMapping
+from typing import Any
 
 import aiohttp
 from tqdm import tqdm
 
+import ai_code_reviewer.dataset.dataset_utils as dataset_utils
+import ai_code_reviewer.dataset.http as http
+import ai_code_reviewer.dataset.import_resolution as import_resolution
+import ai_code_reviewer.dataset.patches as patches
+import ai_code_reviewer.dataset.paths as path_utils
+import ai_code_reviewer.dataset.symbol_extraction as symbol_extraction
 from ai_code_reviewer.dataset import config
-from ai_code_reviewer.dataset.dataset_utils import prune_empty_dataset
-from ai_code_reviewer.dataset.http import async_http_get_bytes, async_http_get_json
-from ai_code_reviewer.dataset.import_resolution import (
-    UsedImportFact,
-    resolve_import_candidates,
-    resolve_reexport_candidates_for_symbol,
-    resolve_used_import_facts,
-)
-from ai_code_reviewer.dataset.patches import (
-    PatchedContentResult,
-    compute_patched_content,
-    full_file_annotated_diff,
-    head_blob_range_to_annotated_1based,
-)
-from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
-from ai_code_reviewer.dataset.symbol_extraction import (
-    extract_changed_symbols,
-    extract_patch_head_line_numbers,
-)
+
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +59,7 @@ def _incoming_import_target_variants(
     )
     non_empty_roots: tuple[str, ...] = tuple(r for r in effective_roots if r)
 
-    norm = normalize_repo_rel_path(changed_path)
+    norm = path_utils.normalize_repo_rel_path(changed_path)
     if norm is None:
         return frozenset()
 
@@ -184,7 +173,7 @@ def _build_repo_tree_string_from_zip_bytes(
                 name = info.filename
                 if not name.startswith(root):
                     continue
-                rel_path = normalize_repo_rel_path(name[len(root) :])
+                rel_path = path_utils.normalize_repo_rel_path(name[len(root) :])
                 if rel_path is not None:
                     paths.append(rel_path)
     except zipfile.BadZipFile:
@@ -240,7 +229,7 @@ def _resolve_base_text_from_cache(
     for key in (path, cinfo.get("previous_filename"), cinfo.get("filename")):
         if not key:
             continue
-        nk = normalize_repo_rel_path(key)
+        nk = path_utils.normalize_repo_rel_path(key)
         if nk is None:
             continue
         t = base_cache.get(nk)
@@ -265,7 +254,7 @@ def _paths_for_base_zip_lookup(path_norm: str, cinfo: dict[str, Any]) -> set[str
     for key in (path_norm, cinfo.get("previous_filename"), cinfo.get("filename")):
         if not key:
             continue
-        nk = normalize_repo_rel_path(key)
+        nk = path_utils.normalize_repo_rel_path(key)
         if nk:
             out.add(nk)
     return out
@@ -293,7 +282,7 @@ def _extract_files_from_zip_bytes(
             if not root:
                 return {p: None for p in paths}
             for path in paths:
-                member_path = normalize_repo_rel_path(path)
+                member_path = path_utils.normalize_repo_rel_path(path)
                 if member_path is None:
                     logger.warning("Skipping unsafe or empty zip path %r", path)
                     out[path] = None
@@ -377,7 +366,7 @@ def _scan_metadata_in_zip_bytes(
                 if not name.startswith(root):
                     continue
                 repo_rel = name[len(root) :]
-                repo_rel_norm = normalize_repo_rel_path(repo_rel)
+                repo_rel_norm = path_utils.normalize_repo_rel_path(repo_rel)
                 if repo_rel_norm is None:
                     continue
                 try:
@@ -422,7 +411,7 @@ def _scan_symbol_usages_in_zip_bytes(
         return {}
 
     pattern = re.compile(
-        r"\b(?:" + "|".join(re.escape(s) for s in sorted(symbols)) + r")\b"
+        r"\b(?:" + "|".join(re.escape(s) for s in sorted(symbols)) + r")\b",
     )
     out: dict[str, str | None] = {}
     try:
@@ -439,7 +428,7 @@ def _scan_symbol_usages_in_zip_bytes(
                 if not name.startswith(root):
                     continue
                 repo_rel = name[len(root) :]
-                repo_rel_norm = normalize_repo_rel_path(repo_rel)
+                repo_rel_norm = path_utils.normalize_repo_rel_path(repo_rel)
                 if repo_rel_norm is None:
                     continue
                 if info.file_size > config.FILE_MAX_BYTES:
@@ -555,14 +544,14 @@ def _build_reexport_map(
     for init_path, content in init_content_map.items():
         if not init_path.endswith("/__init__.py"):
             continue
-        candidates, _ = resolve_import_candidates(content, init_path, source_roots)
+        candidates, _ = import_resolution.resolve_import_candidates(content, init_path, source_roots)
         for cand in candidates:
             reexport.setdefault(cand, set()).add(init_path)
     return {k: frozenset(v) for k, v in reexport.items()}
 
 
 async def _resolve_outgoing_fact_paths(
-    fact: UsedImportFact,
+    fact: import_resolution.UsedImportFact,
     source_roots: tuple[str, ...],
     get_content: Callable[[str], Awaitable[str | None]],
     reexport_cache: dict[tuple[str, str], frozenset[str]],
@@ -589,9 +578,9 @@ async def _resolve_outgoing_fact_paths(
     start_paths = sorted(
         {
             p
-            for p in (normalize_repo_rel_path(path) for path in fact.candidate_paths)
+            for p in (path_utils.normalize_repo_rel_path(path) for path in fact.candidate_paths)
             if p is not None and p.endswith(".py")
-        }
+        },
     )
     if not start_paths:
         return frozenset()
@@ -623,7 +612,7 @@ async def _resolve_outgoing_fact_paths(
         cache_key = (current_path, symbol)
         next_paths = reexport_cache.get(cache_key)
         if next_paths is None:
-            candidates, _ = resolve_reexport_candidates_for_symbol(
+            candidates, _ = import_resolution.resolve_reexport_candidates_for_symbol(
                 current_content,
                 current_path,
                 symbol,
@@ -632,7 +621,7 @@ async def _resolve_outgoing_fact_paths(
             next_norm: set[str] = {
                 p
                 for p in (
-                    normalize_repo_rel_path(candidate) for candidate in candidates
+                    path_utils.normalize_repo_rel_path(candidate) for candidate in candidates
                 )
                 if p is not None and p.endswith(".py")
             }
@@ -643,8 +632,7 @@ async def _resolve_outgoing_fact_paths(
             resolved.add(current_path)
             continue
 
-        for nxt in next_paths:
-            queue.append((nxt, depth + 1))
+        queue.extend((nxt, depth + 1) for nxt in next_paths)
 
     return frozenset(resolved)
 
@@ -680,7 +668,7 @@ async def fetch_paths_from_zipball(
         ``(status, {path: content | None})`` for each requested path.
     """
     url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{base_commit}"
-    status, data = await async_http_get_bytes(
+    status, data = await http.async_http_get_bytes(
         session,
         url,
         semaphore=semaphore,
@@ -765,7 +753,7 @@ async def fetch_paths_and_metadata_from_zipball(
               is empty)
     """
     url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{commit}"
-    status, data = await async_http_get_bytes(
+    status, data = await http.async_http_get_bytes(
         session,
         url,
         semaphore=semaphore,
@@ -791,7 +779,7 @@ async def fetch_paths_and_metadata_from_zipball(
         return status, {}, {}, {}
 
     def _extract_all() -> tuple[
-        dict[str, str | None], dict[str, str], dict[str, str | None]
+        dict[str, str | None], dict[str, str], dict[str, str | None],
     ]:
         path_mapping = _extract_files_from_zip_bytes(data, paths) if paths else {}
         meta_mapping = (
@@ -838,15 +826,18 @@ async def fetch_compare_patches(
 
     Returns:
         A tuple containing:
-            - A dictionary mapping each relevant path (`filename` and `previous_filename` for renames) to
-            `{"patch": str | None, "status": str | None, "filename": str | None, "previous_filename": str | None}`.
-            - A boolean indicating whether the compare returned exactly 300 files (possible truncation per GitHub).
+            - A dictionary mapping each relevant path (`filename` and
+              `previous_filename` for renames) to patch metadata: keys
+              ``patch``, ``status``, ``filename``, ``previous_filename``
+              (each ``str | None``).
+            - A boolean indicating whether the compare returned exactly 300
+              files (possible truncation per GitHub).
     """
     url = (
         f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/compare/"
         f"{base_commit}...{head_commit}"
     )
-    status, data = await async_http_get_json(
+    status, data = await http.async_http_get_json(
         session,
         url,
         semaphore=semaphore,
@@ -897,11 +888,11 @@ async def fetch_compare_patches(
             "previous_filename": prev,
         }
         if fn:
-            nfn = normalize_repo_rel_path(fn)
+            nfn = path_utils.normalize_repo_rel_path(fn)
             if nfn:
                 path_to_info[nfn] = info
         if prev:
-            nprev = normalize_repo_rel_path(prev)
+            nprev = path_utils.normalize_repo_rel_path(prev)
             if nprev:
                 path_to_info[nprev] = info
     return path_to_info, maybe_truncated
@@ -943,7 +934,7 @@ async def gather_compare_patches_bounded(
     if n == 0:
         return []
     results: list[tuple[dict[str, dict[str, Any]], bool] | BaseException | None] = [
-        None
+        None,
     ] * n
     worker_count = min(n, config.GITHUB_API_CONCURRENCY)
     work_queue: asyncio.Queue[tuple[int, tuple[str, str, str]] | object] = (
@@ -1075,8 +1066,9 @@ async def _enrich_one_repo(
         base_commit = pr_entry.get("base_commit")
         if not base_commit:
             continue
-        for snapshot_commit in pr_entry["commits"].keys():
-            compare_metas.append((pr_number, base_commit, snapshot_commit))
+        compare_metas.extend(
+            (pr_number, base_commit, sc) for sc in pr_entry["commits"]
+        )
 
     compare_results: list[tuple[str, str, str, dict[str, dict[str, Any]], bool]] = []
     if compare_metas:
@@ -1103,11 +1095,11 @@ async def _enrich_one_repo(
             else:
                 cmap, trunc = result
             compare_results.append(
-                (pr_number, base_commit, snapshot_commit, cmap, trunc)
+                (pr_number, base_commit, snapshot_commit, cmap, trunc),
             )
 
     compare_cache: dict[tuple[Any, str], dict[str, dict[str, Any]]] = {}
-    for pr_number, base_commit, snapshot_commit, cmap, _trunc in compare_results:
+    for pr_number, _base_commit, snapshot_commit, cmap, _trunc in compare_results:
         compare_cache[(pr_number, snapshot_commit)] = cmap
 
     if config.INCLUDE_NO_COMMENT_FILES:
@@ -1132,10 +1124,10 @@ async def _enrich_one_repo(
         all_base_commits.add(base_commit)
         for snapshot_commit, path_map in pr_entry["commits"].items():
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
-            for path in path_map.keys():
+            for path in path_map:
                 if path in {"metadata_files", "file_tree"}:
                     continue
-                path_norm = normalize_repo_rel_path(path)
+                path_norm = path_utils.normalize_repo_rel_path(path)
                 if path_norm is None:
                     continue
                 cinfo = cmap.get(path_norm)
@@ -1232,7 +1224,7 @@ async def _enrich_one_repo(
                 if path in {"metadata_files", "file_tree"}:
                     continue
                 file_entry = pr_entry["commits"][snapshot_commit][path]
-                path_norm = normalize_repo_rel_path(path)
+                path_norm = path_utils.normalize_repo_rel_path(path)
                 if path_norm is None:
                     del pr_entry["commits"][snapshot_commit][path]
                     continue
@@ -1250,7 +1242,7 @@ async def _enrich_one_repo(
                     file_entry["patch"] = patch
                 else:
                     base_text = _resolve_base_text_from_cache(
-                        base_cache, path_norm, cinfo
+                        base_cache, path_norm, cinfo,
                     )
                     if base_text is None:
                         del pr_entry["commits"][snapshot_commit][path]
@@ -1278,7 +1270,7 @@ async def _enrich_one_repo(
         snapshot_commit: str,
     ) -> tuple[str, int, bytes]:
         url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{snapshot_commit}"
-        status, data = await async_http_get_bytes(
+        status, data = await http.async_http_get_bytes(
             session,
             url,
             semaphore=semaphore,
@@ -1309,10 +1301,10 @@ async def _enrich_one_repo(
             if _pf_status == 200:
                 commit_to_zip_bytes[_sc] = _pf_data
                 commit_to_source_roots[_sc] = await asyncio.to_thread(
-                    _infer_source_roots_from_zip_manifest, _pf_data
+                    _infer_source_roots_from_zip_manifest, _pf_data,
                 )
                 commit_to_file_tree[_sc] = await asyncio.to_thread(
-                    _build_repo_tree_string_from_zip_bytes, _pf_data, repo
+                    _build_repo_tree_string_from_zip_bytes, _pf_data, repo,
                 )
             else:
                 logger.warning(
@@ -1346,7 +1338,7 @@ async def _enrich_one_repo(
         path_map: MutableMapping[str, Any],
     ) -> tuple[str, set[str], set[str], set[str]]:
         _commit_source_roots = commit_to_source_roots.get(
-            snapshot_commit, config.IMPORT_SOURCE_ROOTS
+            snapshot_commit, config.IMPORT_SOURCE_ROOTS,
         )
         snapshot_dep_candidates: set[str] = set()
         snapshot_changed_symbols: set[str] = set()
@@ -1360,8 +1352,8 @@ async def _enrich_one_repo(
             if not patch_str:
                 continue
 
-            result: PatchedContentResult | None = compute_patched_content(
-                base_str, patch_str, path
+            result: patches.PatchedContentResult | None = patches.compute_patched_content(
+                base_str, patch_str, path,
             )
             if result is None:
                 for comment in file_entry.get("comments", []):
@@ -1372,7 +1364,7 @@ async def _enrich_one_repo(
             file_entry["patched_content"] = result.annotated
             file_entry["_head_text"] = result.head_text
             for comment in file_entry.get("comments", []):
-                a_s, a_e = head_blob_range_to_annotated_1based(
+                a_s, a_e = patches.head_blob_range_to_annotated_1based(
                     comment.get("head_start_line"),
                     comment.get("head_end_line"),
                     result.head_to_annotated,
@@ -1383,8 +1375,8 @@ async def _enrich_one_repo(
             if not path.endswith(".py"):
                 continue
 
-            used_facts, used_unresolvable = resolve_used_import_facts(
-                result.head_text, path, _commit_source_roots
+            used_facts, used_unresolvable = import_resolution.resolve_used_import_facts(
+                result.head_text, path, _commit_source_roots,
             )
             if used_unresolvable:
                 logger.debug(
@@ -1404,8 +1396,8 @@ async def _enrich_one_repo(
                 file_entry["_dep_candidates"] = used_candidates
                 snapshot_dep_candidates |= used_candidates
             elif used_unresolvable > 0:
-                broad_candidates, unresolvable = resolve_import_candidates(
-                    result.head_text, path, _commit_source_roots
+                broad_candidates, unresolvable = import_resolution.resolve_import_candidates(
+                    result.head_text, path, _commit_source_roots,
                 )
                 if unresolvable:
                     logger.debug(
@@ -1420,8 +1412,8 @@ async def _enrich_one_repo(
                     file_entry["_dep_candidates"] = broad_candidates
                     snapshot_dep_candidates |= broad_candidates
 
-            changed_lines = extract_patch_head_line_numbers(patch_str)
-            raw_symbols = extract_changed_symbols(
+            changed_lines = symbol_extraction.extract_patch_head_line_numbers(patch_str)
+            raw_symbols = symbol_extraction.extract_changed_symbols(
                 result.head_text,
                 changed_lines,
                 min_name_length=config.INCOMING_DEP_MIN_SYMBOL_LENGTH,
@@ -1430,7 +1422,7 @@ async def _enrich_one_repo(
                 capped: frozenset[str] = frozenset(
                     sorted(raw_symbols, key=len, reverse=True)[
                         : config.INCOMING_DEP_MAX_SYMBOLS_PER_FILE
-                    ]
+                    ],
                 )
                 file_entry["_changed_symbols"] = capped
                 snapshot_changed_symbols |= set(capped)
@@ -1482,7 +1474,7 @@ async def _enrich_one_repo(
         zip_data = commit_to_zip_bytes.get(snapshot_commit)
         paths_needed = commit_to_dep_candidates.get(snapshot_commit, set())
         snapshot_symbols = frozenset(
-            commit_to_changed_symbols.get(snapshot_commit, set())
+            commit_to_changed_symbols.get(snapshot_commit, set()),
         )
         init_paths = commit_to_init_paths.get(snapshot_commit, set())
 
@@ -1560,7 +1552,7 @@ async def _enrich_one_repo(
             # Use per-commit inferred source roots for both outgoing candidate
             # filtering and incoming dep import-link validation.
             snapshot_source_roots = commit_to_source_roots.get(
-                snapshot_commit, config.IMPORT_SOURCE_ROOTS
+                snapshot_commit, config.IMPORT_SOURCE_ROOTS,
             )
             # Build a one-hop re-export map: sub-module path →
             # frozenset of __init__.py paths that import from it.
@@ -1576,29 +1568,37 @@ async def _enrich_one_repo(
             outgoing_init_pruned = 0
             reexport_cache: dict[tuple[str, str], frozenset[str]] = {}
 
-            async def _get_raw_dep_content(dep_path: str) -> str | None:
-                dep_norm = normalize_repo_rel_path(dep_path)
+            async def _get_raw_dep_content(
+                dep_path: str,
+                *,
+                _path_map: dict[str, Any] = path_map,
+                _content_map: dict[str, str | None] = content_map,
+                _snapshot_zip_bytes: bytes | None = snapshot_zip_bytes,
+            ) -> str | None:
+                dep_norm = path_utils.normalize_repo_rel_path(dep_path)
                 if dep_norm is None:
                     return None
 
-                dep_entry = path_map.get(dep_norm)
+                dep_entry = _path_map.get(dep_norm)
                 if dep_entry is not None:
                     head_text = dep_entry.get("_head_text")
                     if isinstance(head_text, str):
                         return head_text
 
-                if dep_norm in content_map:
-                    return content_map[dep_norm]
+                if dep_norm in _content_map:
+                    return _content_map[dep_norm]
 
-                if snapshot_zip_bytes is None:
-                    content_map[dep_norm] = None
+                if _snapshot_zip_bytes is None:
+                    _content_map[dep_norm] = None
                     return None
 
                 extracted = await asyncio.to_thread(
-                    _extract_files_from_zip_bytes, snapshot_zip_bytes, {dep_norm}
+                    _extract_files_from_zip_bytes,
+                    _snapshot_zip_bytes,
+                    {dep_norm},
                 )
                 value = extracted.get(dep_norm)
-                content_map[dep_norm] = value
+                _content_map[dep_norm] = value
                 return value
 
             for path, file_entry in path_map.items():
@@ -1633,7 +1633,7 @@ async def _enrich_one_repo(
                             fact_fallback: set[str] = {
                                 candidate_norm
                                 for candidate_norm in (
-                                    normalize_repo_rel_path(candidate)
+                                    path_utils.normalize_repo_rel_path(candidate)
                                     for candidate in fact.candidate_paths
                                 )
                                 if (
@@ -1645,15 +1645,11 @@ async def _enrich_one_repo(
                             candidate_set |= fact_fallback
 
                 # Keep broad fallback behavior when precise usage facts are absent.
-                if not usage_facts and candidates:
-                    candidate_set |= set(candidates)
-                # Safety net: if precise path resolution produced nothing, retain
-                # broad candidates collected in Phase 5.
-                elif usage_facts and not candidate_set and candidates:
+                if (not usage_facts and candidates) or (usage_facts and not candidate_set and candidates):
                     candidate_set |= set(candidates)
 
                 candidate_set, removed_init_count = _prune_intermediate_init_paths(
-                    candidate_set
+                    candidate_set,
                 )
                 outgoing_init_pruned += removed_init_count
 
@@ -1684,7 +1680,7 @@ async def _enrich_one_repo(
                     # candidate truly imports the changed module, not just
                     # mentions the same symbol name by coincidence.
                     target_variants = _incoming_import_target_variants(
-                        path, snapshot_source_roots
+                        path, snapshot_source_roots,
                     )
                     # One-hop re-export expansion: if any __init__.py in the
                     # changed file's package hierarchy re-exports from this
@@ -1700,7 +1696,7 @@ async def _enrich_one_repo(
                     file_pattern = re.compile(
                         r"\b(?:"
                         + "|".join(re.escape(s) for s in sorted(changed_symbols))
-                        + r")\b"
+                        + r")\b",
                     )
                     incoming: dict[str, str] = {}
                     for dep_path, dep_content in usage_map.items():
@@ -1712,8 +1708,8 @@ async def _enrich_one_repo(
                         # file has an import statement that resolves to the
                         # changed module (or one of its package-init equivalents
                         # under any recognised source root).
-                        dep_imports, _ = resolve_import_candidates(
-                            dep_content, dep_path, snapshot_source_roots
+                        dep_imports, _ = import_resolution.resolve_import_candidates(
+                            dep_content, dep_path, snapshot_source_roots,
                         )
                         if dep_imports & target_variants:
                             # Prefer annotated patched content when incoming dep was
@@ -1771,7 +1767,7 @@ async def _enrich_one_repo(
                 cinfo = cmap.get(meta_path)
                 if cinfo and cinfo.get("patch"):
                     base_text = base_meta.get(meta_path, "")
-                    result[meta_path] = full_file_annotated_diff(base_text, head_text)
+                    result[meta_path] = patches.full_file_annotated_diff(base_text, head_text)
                 else:
                     result[meta_path] = head_text
             if result:
@@ -1830,7 +1826,7 @@ async def enrich_dataset_with_code(
     headers = config.github_api_headers()
     repo_names = list(dataset.keys())
     if not repo_names:
-        prune_empty_dataset(dataset)
+        dataset_utils.prune_empty_dataset(dataset)
         return
 
     worker_count = min(len(repo_names), config.GITHUB_API_CONCURRENCY)
@@ -1859,4 +1855,4 @@ async def enrich_dataset_with_code(
         await asyncio.gather(*(_repo_worker() for _ in range(worker_count)))
     finally:
         pbar.close()
-    prune_empty_dataset(dataset)
+    dataset_utils.prune_empty_dataset(dataset)

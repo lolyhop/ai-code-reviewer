@@ -5,11 +5,12 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from ai_code_reviewer.dataset.config import IMPORT_SOURCE_ROOTS
+from ai_code_reviewer.dataset import config
+
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SOURCE_ROOTS = IMPORT_SOURCE_ROOTS
+_DEFAULT_SOURCE_ROOTS = config.IMPORT_SOURCE_ROOTS
 
 # Top-level names belonging to the standard library or the interpreter's
 # built-in modules.  Imports whose first dotted component appears here are
@@ -19,7 +20,7 @@ _DEFAULT_SOURCE_ROOTS = IMPORT_SOURCE_ROOTS
 # back gracefully to an empty set so the filter is simply a no-op on older
 # interpreters.
 _STDLIB_TOP_LEVEL: frozenset[str] = frozenset(
-    getattr(sys, "stdlib_module_names", frozenset())
+    getattr(sys, "stdlib_module_names", frozenset()),
 ) | frozenset(sys.builtin_module_names)
 
 
@@ -214,7 +215,7 @@ def _candidates_for_node(
             if alias.name == "*":
                 continue
             candidates.extend(
-                _module_parts_to_candidates(mod_parts + [alias.name], source_roots)
+                _module_parts_to_candidates([*mod_parts, alias.name], source_roots),
             )
 
     return candidates, False
@@ -264,15 +265,15 @@ def resolve_import_candidates(
     unresolvable_count = 0
 
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+        if not isinstance(node, ast.Import | ast.ImportFrom):
             continue
         try:
             node_candidates, unresolvable = _candidates_for_node(
-                node, file_path, source_roots
+                node, file_path, source_roots,
             )
         except Exception as exc:
             logger.debug(
-                "Unexpected error resolving import in %s: %s", file_path, exc
+                "Unexpected error resolving import in %s: %s", file_path, exc,
             )
             unresolvable_count += 1
             continue
@@ -462,7 +463,7 @@ def resolve_used_import_facts(
                         imported_name=None,
                         local_name=local_name,
                         candidate_paths=candidates,
-                    )
+                    ),
                 )
             continue
 
@@ -472,11 +473,11 @@ def resolve_used_import_facts(
         level = node.level or 0
         try:
             module_candidates, unresolvable = _candidates_for_node(
-                node, file_path, source_roots
+                node, file_path, source_roots,
             )
         except Exception as exc:
             logger.debug(
-                "Unexpected error resolving used import in %s: %s", file_path, exc
+                "Unexpected error resolving used import in %s: %s", file_path, exc,
             )
             unresolvable_count += 1
             continue
@@ -497,7 +498,7 @@ def resolve_used_import_facts(
                 mod_parts = node.module.split(".")
                 if mod_parts and mod_parts[0] not in _STDLIB_TOP_LEVEL:
                     bound_candidates.update(
-                        _module_parts_to_candidates(mod_parts + [alias.name], source_roots)
+                        _module_parts_to_candidates([*mod_parts, alias.name], source_roots),
                     )
             elif level > 0:
                 anchor_candidates = _relative_import_candidates(node.module, level, file_path)
@@ -523,7 +524,7 @@ def resolve_used_import_facts(
                     imported_name=alias.name,
                     local_name=local_name,
                     candidate_paths=frozenset(alias_candidates),
-                )
+                ),
             )
 
     return facts, unresolvable_count
@@ -549,7 +550,7 @@ def _iter_module_level_import_nodes(
 
     def _walk_block(statements: list[ast.stmt]) -> None:
         for stmt in statements:
-            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            if isinstance(stmt, ast.Import | ast.ImportFrom):
                 nodes.append(stmt)
                 continue
             if isinstance(stmt, ast.If):
@@ -563,7 +564,7 @@ def _iter_module_level_import_nodes(
                 for handler in stmt.handlers:
                     _walk_block(handler.body)
                 continue
-            if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            if isinstance(stmt, ast.With | ast.AsyncWith):
                 _walk_block(stmt.body)
                 continue
             if isinstance(stmt, ast.Match):
@@ -608,7 +609,7 @@ def resolve_reexport_candidates_for_symbol(
         tree = ast.parse(source_code, filename=file_path)
     except SyntaxError as exc:
         logger.debug(
-            "SyntaxError parsing %s for re-export analysis: %s", file_path, exc
+            "SyntaxError parsing %s for re-export analysis: %s", file_path, exc,
         )
         return set(), 1
 
@@ -642,7 +643,7 @@ def resolve_reexport_candidates_for_symbol(
                 level=node.level,
             )
             node_candidates, unresolvable = _candidates_for_node(
-                alias_node, file_path, source_roots
+                alias_node, file_path, source_roots,
             )
             if unresolvable:
                 unresolvable_count += 1

@@ -4,13 +4,14 @@ import ast
 import logging
 import re
 
+
 logger = logging.getLogger(__name__)
 
 # Matches the new-file hunk header in a unified diff, e.g. `@@ -3,7 +10,5 @@`.
 # Group 1: new-file start line (1-based).
 # Group 2: new-file line count (optional; absent when count is 1).
 _HUNK_HEADER_RE: re.Pattern[str] = re.compile(
-    r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@"
+    r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@",
 )
 
 
@@ -112,10 +113,12 @@ def extract_changed_symbols(
             # positive candidates in the zip scan.
             if node.lineno in changed_line_numbers and len(node.name) >= min_name_length:
                 symbols.add(node.name)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             node_end: int = getattr(node, "end_lineno", node.lineno)
-            if any(node.lineno <= ln <= node_end for ln in changed_line_numbers):
-                if len(node.name) >= min_name_length:
-                    symbols.add(node.name)
+            if (
+                any(node.lineno <= ln <= node_end for ln in changed_line_numbers)
+                and len(node.name) >= min_name_length
+            ):
+                symbols.add(node.name)
 
     return symbols
