@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gzip
-import json
 import logging
 import os
 import tempfile
@@ -10,7 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import orjson
+import zstandard as zstd
+
 logger = logging.getLogger(__name__)
+
+_GZIP_MAGIC = b"\x1f\x8b"
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def dataset_to_plain_dict(obj: Any) -> Any:
@@ -72,15 +77,26 @@ def _merge_plain_dict_into_target(
                             tgt_file[key] = val
 
 
+def _decompress_checkpoint(raw: bytes) -> bytes:
+    """Decompress checkpoint bytes (zstd preferred; gzip for legacy files)."""
+    if len(raw) >= 4 and raw[:4] == _ZSTD_MAGIC:
+        return zstd.ZstdDecompressor().decompress(raw)
+    if len(raw) >= 2 and raw[:2] == _GZIP_MAGIC:
+        return gzip.decompress(raw)
+    msg = "Checkpoint is not zstd- or gzip-compressed (unrecognized magic bytes)"
+    raise ValueError(msg)
+
+
 def load_dataset_checkpoint(
     path: Path | str,
     make_dataset: Callable[[], MutableMapping[str, Any]],
 ) -> MutableMapping[str, Any]:
-    """Load a gzip JSON checkpoint and return a dataset compatible with `make_dataset()`.
+    """Load a JSON checkpoint (zstd or legacy gzip) into a dataset tree.
 
     Args:
         path:
-            Path to `*.json.gz` written by `save_dataset_checkpoint`.
+            Path to ``*.json.zst`` from :func:`save_dataset_checkpoint`, or legacy
+            ``*.json.gz``.
         make_dataset:
             Dataset factory.
 
@@ -89,32 +105,32 @@ def load_dataset_checkpoint(
 
     Raises:
         ValueError:
-            If schema version is unsupported or the file is missing `dataset`.
+            If the file is missing a top-level ``dataset`` object or uses an
+            unknown compression format.
     """
     path = Path(path)
-    with gzip.open(path, "rt", encoding="utf-8") as f:
-        wrapper: dict[str, Any] = json.load(f)
+    raw = path.read_bytes()
+    payload = _decompress_checkpoint(raw)
+    wrapper: dict[str, Any] = orjson.loads(payload)
 
-    raw = wrapper.get("dataset")
-    if not isinstance(raw, dict):
+    raw_dataset = wrapper.get("dataset")
+    if not isinstance(raw_dataset, dict):
         raise ValueError("Checkpoint missing 'dataset' object")
 
-    return plain_dict_to_dataset(raw, make_dataset)
+    return plain_dict_to_dataset(raw_dataset, make_dataset)
 
 
 def save_dataset_checkpoint(
     dataset: MutableMapping[str, Any],
     path: Path | str,
 ) -> Path:
-    """Atomically write the dataset to the given `path` (gzip JSON).
-
-    The caller chooses `path` (including filename and parent directory).
+    """Atomically write the dataset as zstd-compressed JSON (orjson).
 
     Args:
         dataset:
             In-memory dataset (`defaultdict` or plain nested dicts).
         path:
-            Destination file path, typically ending in `.json.gz`.
+            Destination path (typically ``*.json.zst``).
 
     Returns:
         `Path` to the written file.
@@ -131,19 +147,17 @@ def save_dataset_checkpoint(
         "dataset": dataset_to_plain_dict(dataset),
     }
 
+    payload = orjson.dumps(wrapper, option=orjson.OPT_NON_STR_KEYS)
+    compressed = zstd.ZstdCompressor().compress(payload)
+
     fd, tmp_name = tempfile.mkstemp(
         prefix=".checkpoint_",
-        suffix=".json.gz.tmp",
+        suffix=".tmp",
         dir=final_path.parent,
     )
     try:
         with os.fdopen(fd, "wb") as raw:
-            with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as gz:
-                payload = json.dumps(
-                    wrapper,
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                gz.write(payload)
+            raw.write(compressed)
         os.replace(tmp_name, final_path)
     except OSError:
         try:

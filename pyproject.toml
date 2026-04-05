@@ -11,10 +11,14 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9.0",
     "ipykernel>=6.0.0",
+    "orjson>=3.9.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.0",
     "tqdm>=4.0",
     "whatthepatch>=1.0.0",
+    "zstandard>=0.22.0",
 ]
 
 [tool.setuptools.packages.find]
