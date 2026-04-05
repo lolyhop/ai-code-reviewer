@@ -218,6 +218,7 @@ data/
 *.xls
 *.xlsx
 *.gz
+*.zst
 *.tar
 temp.ipynb
 temp.txt

@@ -12,6 +12,7 @@ from typing import Any
 import orjson
 import zstandard as zstd
 
+
 logger = logging.getLogger(__name__)
 
 _GZIP_MAGIC = b"\x1f\x8b"
@@ -158,10 +159,10 @@ def save_dataset_checkpoint(
     try:
         with os.fdopen(fd, "wb") as raw:
             raw.write(compressed)
-        os.replace(tmp_name, final_path)
+        Path(tmp_name).replace(final_path)
     except OSError:
         try:
-            os.unlink(tmp_name)
+            Path(tmp_name).unlink()
         except OSError:
             logger.exception("Could not remove temp checkpoint %s", tmp_name)
         raise

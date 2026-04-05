@@ -17,6 +17,7 @@ from tenacity.wait import wait_random_exponential
 
 from ai_code_reviewer.dataset import config
 
+
 logger = logging.getLogger(__name__)
 
 _EXP_WAIT = wait_random_exponential(
@@ -81,9 +82,7 @@ def _wait_retry_after_or_exponential(retry_state: RetryCallState) -> float:
 
 
 def _should_retry_http(exc: BaseException) -> bool:
-    return isinstance(
-        exc, (RetryableHTTPStatusError, asyncio.TimeoutError, aiohttp.ClientError)
-    )
+    return isinstance(exc, RetryableHTTPStatusError | asyncio.TimeoutError | aiohttp.ClientError)
 
 
 def _retry_state_exception(retry_state: RetryCallState) -> BaseException | None:
@@ -184,37 +183,27 @@ async def async_http_get_bytes(
     async def _attempt() -> tuple[int, bytes]:
         status: int = 0
         body: bytes = b""
-        async with semaphore:
-            async with session.get(url, headers=headers, timeout=timeout) as response:
-                status = response.status
-                if status in config.HTTP_RETRY_STATUSES:
-                    ra = _parse_retry_after(response)
-                    await response.read()
-                    raise RetryableHTTPStatusError(status, retry_after=ra)
-                hdrs = response.headers
-                if max_response_bytes is not None:
-                    declared_bytes = _parse_content_length(response)
-                    if (
-                        declared_bytes is not None
-                        and declared_bytes > max_response_bytes
-                    ):
-                        response.close()
-                        body = (
-                            "Response too large: content-length "
-                            f"{declared_bytes} exceeds cap {max_response_bytes}"
-                        ).encode("utf-8")
-                        return 413, body
-                    body, too_large = await _read_bytes_with_limit(
-                        response, max_response_bytes
-                    )
-                    if too_large:
-                        body = (
-                            "Response too large: streamed payload exceeded cap "
-                            f"{max_response_bytes}"
-                        ).encode("utf-8")
-                        return 413, body
-                else:
-                    body = await response.read()
+        async with semaphore, session.get(url, headers=headers, timeout=timeout) as response:
+            status = response.status
+            if status in config.HTTP_RETRY_STATUSES:
+                ra = _parse_retry_after(response)
+                await response.read()
+                raise RetryableHTTPStatusError(status, retry_after=ra)
+            hdrs = response.headers
+            if max_response_bytes is not None:
+                declared_bytes = _parse_content_length(response)
+                if declared_bytes is not None and declared_bytes > max_response_bytes:
+                    response.close()
+                    body = (
+                        f"Response too large: content-length {declared_bytes} exceeds cap {max_response_bytes}"
+                    ).encode()
+                    return 413, body
+                body, too_large = await _read_bytes_with_limit(response, max_response_bytes)
+                if too_large:
+                    body = (f"Response too large: streamed payload exceeded cap {max_response_bytes}").encode()
+                    return 413, body
+            else:
+                body = await response.read()
         await _maybe_github_rate_limit_sleep(url, status, hdrs)
         return status, body
 
@@ -264,16 +253,15 @@ async def async_http_get_json(
         status: int = 0
         parsed: Any | None = None
         hdrs: aiohttp.typedefs.LooseHeaders | None = None
-        async with semaphore:
-            async with session.get(url, headers=headers, timeout=timeout) as response:
-                status = response.status
-                text = await response.text()
-                if status in config.HTTP_RETRY_STATUSES:
-                    ra = _parse_retry_after(response)
-                    raise RetryableHTTPStatusError(status, retry_after=ra)
-                hdrs = response.headers
-                if status == 200:
-                    parsed = json.loads(text)
+        async with semaphore, session.get(url, headers=headers, timeout=timeout) as response:
+            status = response.status
+            text = await response.text()
+            if status in config.HTTP_RETRY_STATUSES:
+                ra = _parse_retry_after(response)
+                raise RetryableHTTPStatusError(status, retry_after=ra)
+            hdrs = response.headers
+            if status == 200:
+                parsed = json.loads(text)
         if hdrs is not None:
             await _maybe_github_rate_limit_sleep(url, status, hdrs)
         if status != 200:
@@ -329,18 +317,15 @@ async def async_http_post_json(
         status: int = 0
         parsed: Any | None = None
         hdrs: aiohttp.typedefs.LooseHeaders | None = None
-        async with semaphore:
-            async with session.post(
-                url, json=payload, headers=headers, timeout=timeout
-            ) as response:
-                status = response.status
-                text = await response.text()
-                if status in config.HTTP_RETRY_STATUSES:
-                    ra = _parse_retry_after(response)
-                    raise RetryableHTTPStatusError(status, retry_after=ra)
-                hdrs = response.headers
-                if status == 200:
-                    parsed = json.loads(text)
+        async with semaphore, session.post(url, json=payload, headers=headers, timeout=timeout) as response:
+            status = response.status
+            text = await response.text()
+            if status in config.HTTP_RETRY_STATUSES:
+                ra = _parse_retry_after(response)
+                raise RetryableHTTPStatusError(status, retry_after=ra)
+            hdrs = response.headers
+            if status == 200:
+                parsed = json.loads(text)
         if hdrs is not None:
             await _maybe_github_rate_limit_sleep(url, status, hdrs)
         if status != 200:

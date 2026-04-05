@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, MutableMapping
+from collections.abc import MutableMapping
+from typing import Any
 
 import aiohttp
 from tqdm import tqdm
 
+import ai_code_reviewer.dataset.dataset_utils as dataset_utils
+import ai_code_reviewer.dataset.http as http
 from ai_code_reviewer.dataset import config
-from ai_code_reviewer.dataset.dataset_utils import (
-    prune_empty_dataset,
-)
-from ai_code_reviewer.dataset.http import async_http_post_json
+
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ async def fetch_review_threads_for_pr(
             "pr": pr_int,
             "after": cursor,
         }
-        status, data = await async_http_post_json(
+        status, data = await http.async_http_post_json(
             session,
             config.GITHUB_GRAPHQL_API,
             payload={"query": _REVIEW_THREADS_QUERY, "variables": variables},
@@ -272,7 +272,7 @@ async def enrich_dataset_with_graphql_info(
     pr_jobs: list[tuple[str, str]] = [
         (repo_name, pr_number)
         for repo_name, pr_map in dataset.items()
-        for pr_number in pr_map.keys()
+        for pr_number in pr_map
     ]
 
     if not pr_jobs:
@@ -351,4 +351,4 @@ async def enrich_dataset_with_graphql_info(
 
     _populate_pr_and_repo_metadata(dataset, meta_map)
     _populate_is_resolved_on_comments(dataset, resolution_index)
-    prune_empty_dataset(dataset)
+    dataset_utils.prune_empty_dataset(dataset)
