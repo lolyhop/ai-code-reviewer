@@ -199,7 +199,10 @@ Evaluation proceeds at the PR level across all changed files:
 4. A file-level "Loss" is: *AI Score < Human Score*.
 
 **PR-Level Win Rate:**
-$$\text{Win Rate} = \frac{\text{\# Files with AI Win} + 0.5 \times \text{\# Files with Tie}}{\text{Total \# Files}}$$
+
+$$
+\text{Win Rate} = \frac{\text{Num Files with AI Win} + 0.5 \times \text{Num Files with Tie}}{\text{Total Num Files}}
+$$
 
 This metric expresses: *"In what fraction of files does the AI provide review quality comparable to or better than the human?"*
 
@@ -296,7 +299,7 @@ Before running the full benchmark, we performed a calibration study on manually 
 
 The primary success indicator presented to stakeholders is the **AI Win Rate**, calculated as the percentage of files where the AI review quality was rated higher than or equal to the human reviewer.
 
-$$\text{AI Win Rate} = \frac{\sum_{\text{all files}} (\text{AI Score} - \text{Human Score}) > 0}{\text{Total \# Files Evaluated}}$$
+$$\text{AI Win Rate} = \frac{\sum_{\text{all files}} (\text{AI Score} - \text{Human Score}) > 0}{\text{Total Num Files Evaluated}}$$
 
 **Interpretation:**
 - **75% Win Rate** = *"In 75% of files, our AI provided review quality comparable to or better than Senior developers."*
