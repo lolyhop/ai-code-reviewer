@@ -219,6 +219,7 @@ data/checkpoints/
 *.gz
 *.tar
 temp.ipynb
+temp.txt
 
 # Mac OS files
 .DS_Store
