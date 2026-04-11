@@ -3,7 +3,17 @@ import logging
 import os
 import time
 import typing as tp
+import requests
+import urllib3
 
+# Disable warnings about unverified HTTPS requests globally
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# For requests: turn off certificate verification for ALL requests made via requests
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 import openai
 
 logger = logging.getLogger(__name__)
@@ -54,6 +64,7 @@ class LLMClient:
                     instructions=system_prompt,
                     input=prompt,
                     max_output_tokens=max_tokens,
+                    reasoning={"effort": "none"},
                 )
                 return response.output_text
             except Exception as exc:

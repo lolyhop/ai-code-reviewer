@@ -40,6 +40,9 @@ Repository metadata:
 Pull request metadata:
 {pull_request_metadata}
 
+Repository file tree:
+{file_tree}
+
 Changed file patch:
 {patched_content}
 

@@ -8,7 +8,7 @@ class ModelConfig:
     torch_dtype: str = "bfloat16"
     trust_remote_code: bool = True
     load_in_4bit: bool = False
-    max_input_length: int = 4096
+    max_input_length: int = 16384
 
 
 @dataclass

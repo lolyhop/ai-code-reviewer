@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import typing as tp
 
@@ -22,6 +23,7 @@ from src.ai_code_reviewer.models.schema import ReviewSample
 logger = logging.getLogger(__name__)
 
 DEP_TOP_K = 5
+TOKEN_LIMIT = 30_000
 DOCSTRING_MAX_LINES = 3
 COMMENT_BLOCK_MAX_LINES = 3
 BLANK_RUN_MAX_LINES = 2
@@ -63,7 +65,6 @@ def truncate_file_tree(tree: str, max_depth: int = 2) -> str:
     return "\n".join(result)
 
 
-
 _DEF_RE = re.compile(r"^([+ \-]?)([ \t]*)((?:async\s+)?def\s+.+?:\s*)$")
 
 NumberedLine = tp.Tuple[tp.Optional[int], str]
@@ -81,7 +82,7 @@ def _find_opening_quote(line: str) -> tp.Optional[str]:
         idx = raw.find(q)
         if idx == -1:
             continue
-        after = raw[idx + 3:]
+        after = raw[idx + 3 :]
         if q not in after:
             return q
     return None
@@ -140,7 +141,6 @@ def strip_long_docstrings(
     return result
 
 
-
 def collapse_unchanged_functions(
     numbered: tp.List[NumberedLine],
 ) -> tp.List[NumberedLine]:
@@ -188,9 +188,7 @@ def collapse_unchanged_functions(
                 span = set(range(def_idx, body_end))
                 if not span & changed:
                     result.append((lineno, text))
-                    indent = _detect_indent(
-                        texts[body_start] if body_start < n else ""
-                    )
+                    indent = _detect_indent(texts[body_start] if body_start < n else "")
                     if not indent:
                         indent = "    "
                     result.append((None, f"{indent}[function body is hidden]"))
@@ -223,7 +221,12 @@ def collapse_comment_blocks(
             result.extend(buf)
         else:
             result.extend(buf[:max_lines])
-            result.append((None, f"{_detect_indent(buf[0][1])}# ... [{len(buf) - max_lines} comment lines hidden]"))
+            result.append(
+                (
+                    None,
+                    f"{_detect_indent(buf[0][1])}# ... [{len(buf) - max_lines} comment lines hidden]",
+                )
+            )
         buf.clear()
 
     for entry in numbered:
@@ -290,9 +293,7 @@ def _format_dependencies(deps: tp.Dict[str, str]) -> str:
     return "\n\n".join(sections)
 
 
-def _format_patched_content(
-    path: str, numbered_lines: tp.List[NumberedLine]
-) -> str:
+def _format_patched_content(path: str, numbered_lines: tp.List[NumberedLine]) -> str:
     parts: tp.List[str] = []
     for lineno, text in numbered_lines:
         if lineno is not None:
@@ -421,6 +422,72 @@ def _row_to_review_sample(row: pd.Series) -> ReviewSample:
     )
 
 
+CHECKPOINT_EVERY = 50
+
+
+class Checkpoint:
+    """Lightweight JSON-based checkpoint for resumable row processing."""
+
+    def __init__(
+        self,
+        path: tp.Optional[str] = None,
+        every: int = CHECKPOINT_EVERY,
+    ) -> None:
+        self.path = path
+        self.every = every
+        self._data: tp.Dict[str, tp.List] = {}
+        self._count = 0
+
+    def load(self) -> int:
+        """Load existing checkpoint. Returns number of already-processed rows."""
+        if not self.path or not os.path.exists(self.path):
+            return 0
+        with open(self.path) as f:
+            self._data = json.load(f)
+        self._count = len(next(iter(self._data.values()), []))
+        logger.info("Checkpoint loaded: %d rows from %s", self._count, self.path)
+        return self._count
+
+    def append(self, **kwargs: tp.Any) -> None:
+        """Append one row of results. Auto-saves every *every* rows."""
+        for key, value in kwargs.items():
+            self._data.setdefault(key, []).append(
+                self._make_serializable(value)
+            )
+        self._count += 1
+        if self.path and self._count % self.every == 0:
+            self._save()
+
+    @staticmethod
+    def _make_serializable(v: tp.Any) -> tp.Any:
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return None
+        if isinstance(v, (str, int, float, list)):
+            return v
+        return str(v)
+
+    def finalize(self) -> None:
+        """Remove the checkpoint file (call only after output is saved)."""
+        if self.path and os.path.exists(self.path):
+            os.remove(self.path)
+            logger.info("Checkpoint removed: %s", self.path)
+
+    def save_final(self) -> None:
+        """Flush remaining data to the checkpoint file."""
+        if self.path:
+            self._save()
+
+    def get(self, key: str) -> tp.List:
+        return self._data.get(key, [])
+
+    def _save(self) -> None:
+        with open(self.path, "w") as f:
+            json.dump(self._data, f, ensure_ascii=False)
+        logger.info("Checkpoint: %d rows → %s", self._count, self.path)
+
+
 class DataCleaningPipeline:
     """Validate and classify code-review data via LLM-as-judge."""
 
@@ -429,10 +496,12 @@ class DataCleaningPipeline:
         llm_client: tp.Optional[LLMClient] = None,
         dep_top_k: int = DEP_TOP_K,
         file_tree_max_depth: int = 2,
+        token_limit: int = TOKEN_LIMIT,
     ) -> None:
         self.llm = llm_client
         self.retriever = Retriever(retriever_type="heuristic", top_k=dep_top_k)
         self.file_tree_max_depth = file_tree_max_depth
+        self.token_limit = token_limit
 
     def _build_context(self, row: pd.Series) -> tp.Dict[str, str]:
         sample = _row_to_review_sample(row)
@@ -453,9 +522,7 @@ class DataCleaningPipeline:
                 row.get("file_tree", ""), self.file_tree_max_depth
             )
             or "Not available",
-            "patched_content": _format_patched_content(
-                row.get("path", ""), numbered
-            ),
+            "patched_content": _format_patched_content(row.get("path", ""), numbered),
             "outgoing_dependencies": _format_dependencies(outgoing),
             "incoming_dependencies": _format_dependencies(incoming),
         }
@@ -470,84 +537,121 @@ class DataCleaningPipeline:
         ctx["comments"] = _format_comments(comments)
         return COMMENT_CLASSIFICATION_PROMPT.format(**ctx)
 
-    def validate_no_comment(self, row: pd.Series) -> bool:
-        """Ask the judge whether an uncommented file has a blocking issue."""
-        prompt = self._build_validation_prompt(row)
-        raw = self.llm.generate(prompt, max_tokens=16, temperature=0.0)
-        return _parse_bool(raw)
+    def _exceeds_limit(self, prompt: str) -> bool:
+        return len(prompt) / 4 > self.token_limit
 
-    def classify_comments(self, row: pd.Series) -> tp.List[str]:
-        """Classify every review comment on a file. Returns list of categories."""
+    def _skip_message(self) -> str:
+        return f"Too long (limit = {self.token_limit} tokens)"
+
+    def validate_no_comment(self, row: pd.Series) -> tp.Tuple[tp.Union[bool, str], str]:
+        """Returns (parsed_result, raw_response)."""
+        prompt = self._build_validation_prompt(row)
+        if self._exceeds_limit(prompt):
+            msg = self._skip_message()
+            return msg, msg
+        raw = self.llm.generate(prompt, max_tokens=16, temperature=0.3)
+        return _parse_bool(raw), raw
+
+    def classify_comments(
+        self, row: pd.Series
+    ) -> tp.Tuple[tp.Union[tp.List[str], str], str]:
+        """Returns (parsed_result, raw_response)."""
         comments = _parse_comments_column(row.get("comments", []))
         prompt = self._build_classification_prompt(row)
-        raw = self.llm.generate(prompt, max_tokens=256, temperature=0.0)
-        return _parse_classifications(raw, expected_count=len(comments))
+        if self._exceeds_limit(prompt):
+            msg = self._skip_message()
+            return msg, msg
+        raw = self.llm.generate(prompt, max_tokens=256, temperature=0.3)
+        return _parse_classifications(raw, expected_count=len(comments)), raw
 
     def build_prompts(
         self,
         df: pd.DataFrame,
         max_rows: tp.Optional[int] = None,
+        checkpoint_path: tp.Optional[str] = None,
+        checkpoint_every: int = CHECKPOINT_EVERY,
     ) -> pd.DataFrame:
         """Build prompts for every row without calling the LLM.
 
-        New columns:
-          - ``prompt_type``: ``"validation"`` or ``"classification"``
-          - ``prompt``: the full prompt string ready to send to the LLM
+        Pass *checkpoint_path* to enable resume-on-crash.
         """
         df = df.copy()
         if max_rows is not None:
             df = df.head(max_rows)
 
-        prompt_types: tp.List[str] = []
-        prompts: tp.List[str] = []
+        ckpt = Checkpoint(checkpoint_path, checkpoint_every)
+        start = ckpt.load()
 
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Building prompts"):
+        skipped = 0
+        for i in tqdm(
+            range(start, len(df)), desc="Building prompts", initial=start, total=len(df)
+        ):
+            row = df.iloc[i]
             comments = _parse_comments_column(row.get("comments", []))
-
             if comments:
-                prompt_types.append("classification")
-                prompts.append(self._build_classification_prompt(row))
+                prompt = self._build_classification_prompt(row)
+                ptype = "classification"
             else:
-                prompt_types.append("validation")
-                prompts.append(self._build_validation_prompt(row))
+                prompt = self._build_validation_prompt(row)
+                ptype = "validation"
 
-        df["prompt_type"] = prompt_types
-        df["prompt"] = prompts
+            if self._exceeds_limit(prompt):
+                prompt = self._skip_message()
+                skipped += 1
 
-        return df
+            ckpt.append(prompt_type=ptype, prompt=prompt)
+
+        if skipped:
+            logger.info(
+                "Skipped %d rows exceeding token limit (%d)", skipped, self.token_limit
+            )
+
+        ckpt.save_final()
+        df["prompt_type"] = ckpt.get("prompt_type")
+        df["prompt"] = ckpt.get("prompt")
+        return df, ckpt
 
     def run(
         self,
         df: pd.DataFrame,
         max_rows: tp.Optional[int] = None,
+        checkpoint_path: tp.Optional[str] = None,
+        checkpoint_every: int = CHECKPOINT_EVERY,
     ) -> pd.DataFrame:
-        """Run cleaning on *df* and return it with two new result columns.
+        """Run cleaning with LLM calls.
 
-        New columns:
-          - ``has_blocking_issues``: bool or None (set for rows without comments)
-          - ``comment_categories``: list[str] or None (set for rows with comments)
+        Pass *checkpoint_path* to enable resume-on-crash.
         """
         df = df.copy()
         if max_rows is not None:
             df = df.head(max_rows)
 
-        has_blocking: tp.List[tp.Optional[bool]] = []
-        categories: tp.List[tp.Optional[tp.List[str]]] = []
+        ckpt = Checkpoint(checkpoint_path, checkpoint_every)
+        start = ckpt.load()
 
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Cleaning"):
+        for i in tqdm(
+            range(start, len(df)), desc="Cleaning", initial=start, total=len(df)
+        ):
+            row = df.iloc[i]
             comments = _parse_comments_column(row.get("comments", []))
-
             if comments:
-                has_blocking.append(None)
-                categories.append(self.classify_comments(row))
+                parsed, raw = self.classify_comments(row)
+                ckpt.append(has_blocking=None, categories=parsed, raw_response=raw)
             else:
-                has_blocking.append(self.validate_no_comment(row))
-                categories.append(None)
+                parsed, raw = self.validate_no_comment(row)
+                ckpt.append(has_blocking=parsed, categories=None, raw_response=raw)
 
-        df["has_blocking_issues"] = has_blocking
-        df["comment_categories"] = categories
-
-        return df
+        ckpt.save_final()
+        df["has_blocking_issues"] = [
+            str(v) if v is not None else "" for v in ckpt.get("has_blocking")
+        ]
+        df["comment_categories"] = [
+            str(v) if v is not None else "" for v in ckpt.get("categories")
+        ]
+        df["llm_raw_response"] = [
+            str(v) if v is not None else "" for v in ckpt.get("raw_response")
+        ]
+        return df, ckpt
 
 
 if __name__ == "__main__":
@@ -566,32 +670,58 @@ if __name__ == "__main__":
         action="store_true",
         help="Build prompts and save without calling the LLM",
     )
-    parser.add_argument("--api-key", default=None, help="Yandex Cloud API key")
-    parser.add_argument("--folder-id", default=None, help="Yandex Cloud folder ID")
-    parser.add_argument("--model", default="deepseek-v32/latest")
+    parser.add_argument(
+        "--token-limit",
+        type=int,
+        default=TOKEN_LIMIT,
+        help="Max estimated tokens per prompt",
+    )
+    parser.add_argument(
+        "--checkpoint", default=None, help="Checkpoint file path for resume"
+    )
+    parser.add_argument("--checkpoint-every", type=int, default=50)
+    parser.add_argument(
+        "--api-key",
+        help="Yandex Cloud API key",
+    )
+    parser.add_argument(
+        "--folder-id", help="Yandex Cloud folder ID"
+    )
+    parser.add_argument("--model", default="qwen3.5-35b-a3b-fp8/latest")
     args = parser.parse_args()
 
     data = pd.read_parquet(args.input)
     logger.info("Loaded %d rows from %s", len(data), args.input)
 
     if args.prompts_only:
-        pipeline = DataCleaningPipeline(llm_client=None)
-        result = pipeline.build_prompts(data, max_rows=args.max_rows)
+        pipeline = DataCleaningPipeline(llm_client=None, token_limit=args.token_limit)
+        result, ckpt = pipeline.build_prompts(
+            data,
+            max_rows=args.max_rows,
+            checkpoint_path=args.checkpoint,
+            checkpoint_every=args.checkpoint_every,
+        )
     else:
         client = LLMClient(
             api_key=args.api_key,
             folder_id=args.folder_id,
             model=args.model,
         )
-        pipeline = DataCleaningPipeline(llm_client=client)
-        result = pipeline.run(data, max_rows=args.max_rows)
+        pipeline = DataCleaningPipeline(llm_client=client, token_limit=args.token_limit)
+        result, ckpt = pipeline.run(
+            data,
+            max_rows=args.max_rows,
+            checkpoint_path=args.checkpoint,
+            checkpoint_every=args.checkpoint_every,
+        )
 
     result.to_parquet(args.output, index=False)
     logger.info("Saved %d rows to %s", len(result), args.output)
+    ckpt.finalize()
 
 """
-python -m src.ai_code_reviewer.data_processing.data_cleaning dataset.parquet \
-  -o /Users/chrnegor/Documents/study/Inno_3rd_year_2026/ai-code-reviewer/output.parquet \
-  --prompts-only \
-  -n 100
+python -m src.ai_code_reviewer.data_processing.data_cleaning dataset-4.parquet \
+  -o cleaned_2.parquet \
+  --checkpoint .cleaning_checkpoint_.json \
+  --checkpoint-every 20
 """
