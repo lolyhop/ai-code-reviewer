@@ -27,7 +27,7 @@ TOKEN_LIMIT = 30_000
 DOCSTRING_MAX_LINES = 3
 COMMENT_BLOCK_MAX_LINES = 3
 BLANK_RUN_MAX_LINES = 2
-
+CHECKPOINT_EVERY = 50
 
 def _tree_line_depth(line: str) -> int:
     match = re.search(r"[├└]", line)
@@ -421,10 +421,6 @@ def _row_to_review_sample(row: pd.Series) -> ReviewSample:
         metadata_files=_metadata_files_to_dict(row.get("metadata_files", {})),
     )
 
-
-CHECKPOINT_EVERY = 50
-
-
 class Checkpoint:
     """Lightweight JSON-based checkpoint for resumable row processing."""
 
@@ -723,5 +719,5 @@ if __name__ == "__main__":
 python -m src.ai_code_reviewer.data_processing.data_cleaning dataset-4.parquet \
   -o cleaned_2.parquet \
   --checkpoint .cleaning_checkpoint_.json \
-  --checkpoint-every 20
+  --checkpoint-every 500
 """
