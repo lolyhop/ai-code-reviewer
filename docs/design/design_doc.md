@@ -108,36 +108,176 @@ Another factor towards focusing on Python is the fact that Python is the default
 
 Given the above, we will focus on Python scripts (`.py` files, but excluding Jupyter Notebooks due to parsing complexity) for the initial MVP.
 
-### 3.2 GH Archive Data
-As the main source of PR comments data we will use [GH Archive](https://www.gharchive.org/). This dataset records every public event on GitHub, including Pull Request review comments. 
+### 3.2 Data Sources
 
-From this source we will extract:
-- 
-- 
+#### 3.2.1 GH Archive Data
+As the main source of PR review comments data we use [GH Archive](https://www.gharchive.org/), which records every public event on GitHub as hourly NDJSON (gzip-compressed) files. 
 
-To the best of our knowledge, there is no rate limiting on this dataset, we we could efficiently parallelize the data collection process.
+From `PullRequestReviewCommentEvent` entries, we extract:
+- **Review comment body**: The text of the inline code review comment written by a human reviewer.
+- **Diff hunk**: The code context (surrounding lines) where the comment was posted, essential for understanding what code triggered the feedback.
+- **Comment metadata**: File path, line numbers, and commit IDs (the snapshot commit where the comment was posted).
 
-### 3.3 GitHub API Data
-Though GH Archive provides information about PR review comments, it lacks context around the PR and changed files themselves. For this we will utilize GitHub API to fetch additional information. More specifically, we will utilize two types of API: (1) REST API to fetch PR and changed files content, (2) GraphQL API to fetch PR metadata.
+We filter to Python files only (`.py` extension), exclude comments on the old code version (`LEFT` side), and skip non-English comments and replies. To the best of our knowledge, there is no rate limiting on this dataset, allowing efficient parallel data collection.
 
-From GitHub REST API we will fetch:
--
--
+#### 3.2.2 GitHub API Data
+While GH Archive provides review comments, it lacks critical context about PR diffs and repository structure. We use GitHub's REST and GraphQL APIs to enrich this data.
 
-From GitHub GraphQL API we will fetch:
--
--
--
+**From GitHub REST API:**
+- **Commit compare endpoint**: Fetches the unified diff (patch) and file metadata for all changed files between base and head commits, including file status (added/modified/deleted) and rename information.
+- **Zipball downloads**: Downloads a complete snapshot of the repository at a specific commit, enabling extraction of file content, directory structure, and dependency metadata for both the main changed file and dependency files.
 
+**From GitHub GraphQL API:**
+- **PR-level metadata**: Pull request title and description (body), which provide context for understanding the change's intent.
+- **Repository metadata**: Star count, used as a proxy for project maturity and adoption.
+- **Review thread resolution**: Determines whether inline comments were marked as resolved, useful for filtering or prioritizing unresolved issues.
 
-### 3.4 Dependencies Resolution
+### 3.3 Dependencies Resolution
+To provide comprehensive context around code changes, we resolve both incoming and outgoing dependencies. A diff patch alone shows changes in isolation; dependencies reveal how those changes cascade through the codebase (what uses the modified code) and what infrastructure the change relies on (what the modified code uses).
 
-#### 3.4.1 Incoming Dependencies
+#### 3.3.1 Incoming Dependencies
 
+**Definition**: Files in the repository that import or reference identifiers (functions, classes, variables) defined in the changed file.
 
-#### 3.4.2 Outgoing Dependencies
+**Why we need them**: When a developer modifies a function signature or class definition, downstream files using that code may break. By including incoming dependencies, the model can better understand the impact of changes and flag breaking modifications.
 
-### 3.5 Data Preparation
+**Resolution process**: 
+1. Extract symbols (function/class names) whose definitions or implementations changed in the main file using AST analysis of the patch.
+2. Scan all Python files in the repository for word-boundary occurrences of these symbols.
+3. Return matched files as incoming dependencies.
+
+#### 3.3.2 Outgoing Dependencies
+
+**Definition**: Files that the changed file imports from, either as direct imports or through attribute chains.
+
+**Why we need them**: The modified code may be using outdated, deprecated, or poorly-designed functionality from other modules. By including outgoing dependencies, the model sees what patterns the change relies on and can flag anti-patterns or problematic interactions.
+
+**Resolution process**:
+1. Parse import statements (both absolute and relative imports) from the changed file.
+2. Resolve each import to candidate file paths in the repository, accounting for package structure and source roots (e.g., `src/` layouts).
+3. For each imported name, expand candidates based on observed attribute access patterns in the code (e.g., `module.submodule.function`).
+4. Return matched files as outgoing dependencies.
+
+### 3.4 Data Preparation
+
+#### 3.4.1 Quality Validation
+Quality validation is applied at multiple stages to ensure reliable training data:
+
+**GH Archive Ingestion Filters:**
+- **Event type**: Only `PullRequestReviewCommentEvent` records are retained.
+- **File type**: Python files (`.py` extension) only; other languages and Jupyter Notebooks excluded.
+- **Comment side**: Exclude comments on the LEFT side of diffs (outdated code version); include RIGHT side only (new code).
+- **Reply comments**: Exclude comments that are replies to other comments (`in_reply_to_id` must be null).
+- **Field presence**: Comment body and diff_hunk must both be non-empty.
+- **Language detection**: ASCII character ratio must be ≥ **70%** (`IS_LIKELY_ENGLISH_THRESHOLD = 0.7`) to filter non-English reviews.
+
+**Size Constraints:**
+- **Single file**: Maximum **2 MB** (`FILE_MAX_BYTES = 2,097,152`) to skip corrupted or binary files.
+- **Repository zipball**: Maximum **50 MB** (`ZIPBALL_MAX_BYTES = 52,428,800`) to prevent unbounded downloads.
+
+**Post-Processing Validation:**
+- **Null/NA removal**: Parquet export removes rows with null values in critical columns.
+- **Path normalization**: Normalize and validate all paths against path traversal attacks before processing.
+- **Non-empty diff**: Exclude files with empty `patched_content` (no actual changes).
+
+#### 3.4.2 Context Compression
+After exploratory data analysis, we apply the following limitations and transformations to fit content into LLM context windows while preserving semantic information:
+
+**PR Metadata** (`pr_title` + `pr_body`):
+- Truncate to first **500 characters** (~125 tokens) to capture the intent while removing verbose instructions or repetitive checklists.
+- Strip HTML tags to reduce verbosity while preserving text content.
+
+**Repository Metadata**:
+- **README.md**: First **400 characters** (~100 tokens), HTML tags removed. Sufficient to convey project purpose without implementation details.
+- **Configuration files** (requirements.txt, setup.py, pyproject.toml, setup.cfg): Extract viable parts via regex (project name, description, dependencies) and truncate to **500 characters** (~125 tokens) per file.
+- **Repo metadata cap**: Limit total repository metadata to **4000 characters** (~1000 tokens) across all metadata files to prevent extreme outliers while preserving high-level project context.
+
+**Repository File Tree**:
+- Truncate to **2 levels of depth** (root directory and immediate children) to provide structural context without overwhelming detail.
+- Exclude dot-directories (`.git`, `.github`, `.vscode`, etc.) which contain metadata irrelevant to code review.
+
+**Main Changed File**:
+- Hide function/method bodies without `+` or `-` lines (unmodified code), replacing with `[function body is hidden]` placeholder while preserving the signature.
+- Replace multi-line docstrings exceeding **3 lines** with `[docstring hidden]`.
+- Collapse consecutive comment blocks exceeding **3 lines** to the first 3 lines plus a marker `# ... [N comment lines hidden]`.
+- Reduce runs of more than **2** consecutive blank lines to 2.
+- No hard character truncation (to preserve essential context).
+
+**Incoming and Outgoing Dependencies**:
+- Include top **5 most relevant files** from each dependency type (preserves >75th percentile of PRs without changing distribution).
+- Exclude configuration files (`__init__.py`, `setup.py`, `conftest.py`, `__version__.py`) which lack code-related context.
+- Apply the same compression techniques as the main file (hidden bodies, collapsed comments, etc.).
+
+#### 3.4.3 LLM-based Comment Labelling
+
+Human review comments are inherently noisy — reviewers also leave stylistic suggestions, questions, compliments, and nitpicks. Treating all commented files as positive examples of "buggy code" would severely degrade label quality. Similarly, files with no comments are not guaranteed to be clean: a reviewer may have missed an issue or the file may not have been carefully reviewed at all.
+
+To address both problems, we employ an **LLM-as-a-judge pipeline** (Qwen3 235B via Yandex Cloud Foundation Models) that processes every sample and produces structured labels.
+
+**Comment Classification Taxonomy:**
+
+To define the taxonomy in a data-driven way, we first sampled ~500 human review comments and asked a DeepSeek-v3.2 model to cluster them into coherent groups. After several dialogue iterations, we converged on a nine-category taxonomy:
+
+| Category | Description |
+|---|---|
+| `blocking_issue` | Correctness bugs, security vulnerabilities, data-loss risks, crashes, race conditions |
+| `performance` | Efficiency concerns, unnecessary allocations, algorithmic complexity |
+| `best_practice` | Design patterns, idiomatic code, architectural suggestions, error-handling improvements |
+| `style` | Formatting, naming conventions, import ordering, whitespace |
+| `documentation` | Missing or incorrect docstrings, comments, type hints |
+| `question` | Reviewer asking for clarification or explanation |
+| `nitpick` | Minor optional observations that do not affect correctness or style |
+| `praise` | Positive feedback, approval, compliments |
+| `other` | Does not fit any category above |
+
+**Two Prompt Variants:**
+- **Classification prompt** (files *with* comments): the judge receives full code context (PR metadata, repo metadata, changed file, dependencies, file tree) plus the raw review comments, and outputs one category per comment.
+- **Validation prompt** (files *without* comments): the judge receives the same code context and answers a single binary question — does this file contain a blocking issue? Only files validated as `false` become clean negative examples.
+
+This two-prompt design ensures both positive and negative labels are actively validated rather than assumed.
+
+#### 3.4.4 Data Sampling
+
+The core challenge is severe class imbalance: blocking issues represent only **~11% of all comments**. Naive oversampling or loss reweighting would create artificial patterns. Instead, we apply **selective positive class inclusion** and **high-quality negative augmentation**:
+
+**Positive Class Strategy:**
+- **Blocking issues** (`blocking_issue`): **100% inclusion** — these are our target class; every positive example is valuable.
+- **Performance** (`performance`): **100% inclusion** — rare but highly actionable; all instances retained.
+- **Best practice** (`best_practice`): **50% random sampling** — largest category; prevents overwhelming negatives with procedural feedback.
+- Rationale: Sampling maintains signal while controlling dataset size and preventing memorization of common patterns.
+
+**Negative Class Definition:**
+- Files with **zero human comments** AND **LLM-validated** to contain no blocking issues (high-confidence negatives).
+- This avoids the common pitfall of training on unlabeled data that may actually contain bugs.
+
+**No-Comment File Augmentation:**
+- When enabled (`INCLUDE_NO_COMMENT_FILES = True`), for each snapshot commit, randomly add uncommented Python files from the same commit.
+- Cap: min(count of commented files, available uncommented candidates) — prevents imbalance within snapshots.
+
+**Snapshot Commit Filtering:**
+- Retain top **2,000 snapshot commits** globally (`SNAPSHOT_COMMITS_TO_KEEP = 2000`), ranked by comment count (descending).
+- Break ties deterministically by `(repo_name, pr_number, commit)` lexicographic order to ensure reproducibility.
+- Rationale: Focuses on high-activity commits while maintaining a diverse, manageable dataset.
+
+#### 3.4.5 Train/Validation/Test Split
+
+Preventing data leakage is critical; we use **multi-level isolation** to ensure clean evaluation:
+
+**No-Leakage Guarantees:**
+1. **PR-level isolation**: All files from the same Pull Request (including multiple snapshot commits) go to the same split (train or val or test). Prevents the model from memorizing PR-specific patterns.
+2. **Repository-level holdout**: Every repository that appears in the test set is **completely removed** from the training and validation pools. Prevents the model from learning repository-specific coding styles or idioms.
+
+**Test Set Construction:**
+- **Size**: 100 pull requests with at least one file containing ≥1 `blocking_issue` comment.
+- **Positives**: Files with ≥1 `blocking_issue` comment (128 files).
+- **Negatives**: Files from the same PRs with zero comments and LLM-verified to contain no blocking issues (164 files).
+- **Ratio**: 43.8% positive, 56.2% negative — realistic and challenging.
+
+**Train/Validation Split:**
+- **Ratio**: 80% training, 20% validation.
+- **Stratification**: Stratified by label (blocking issue present or absent) to maintain class distribution across splits.
+- **Total train samples**: 1,913 (687 positive, 1,226 negative, 35.9% positive)
+- **Total val samples**: 536 (162 positive, 374 negative, 30.2% positive)
 
 
 ## 4. Solution
