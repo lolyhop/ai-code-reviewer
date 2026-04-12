@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Any, MutableMapping
+from collections.abc import MutableMapping
+from typing import Any
 
-from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
+import ai_code_reviewer.dataset.paths as path_utils
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +23,8 @@ def make_dataset() -> MutableMapping[str, Any]:
             lambda: {
                 "base_commit": None,
                 "commits": defaultdict(lambda: defaultdict(lambda: {"comments": []})),
-            }
-        )
+            },
+        ),
     )
 
 
@@ -35,7 +37,7 @@ def merge_datasets(
     For each repo, PR, commit, and path, appends comments from `source`,
     skipping comments whose `comment_id` (GraphQL node ID) already exists in
     `target` for that same file and commit snapshot.  Path keys are normalised
-    with `normalize_repo_rel_path` so equivalent raw paths merge into one entry.
+    with `path_utils.normalize_repo_rel_path` so equivalent raw paths merge into one entry.
 
     `base_commit` is taken from `source` only when `target` has no
     `base_commit` yet (first merged hour wins).
@@ -53,7 +55,9 @@ def merge_datasets(
                 tgt_pr["base_commit"] = pr_entry["base_commit"]
             for snapshot_commit, path_map in pr_entry["commits"].items():
                 for path, file_entry in path_map.items():
-                    path_norm = normalize_repo_rel_path(path)
+                    if path in {"metadata_files", "file_tree"}:
+                        continue
+                    path_norm = path_utils.normalize_repo_rel_path(path)
                     if path_norm is None:
                         logger.warning(
                             "Skipping merge for unsafe path key %r in %s PR %s",
@@ -63,11 +67,7 @@ def merge_datasets(
                         )
                         continue
                     tgt_file = tgt_pr["commits"][snapshot_commit][path_norm]
-                    existing_ids = {
-                        c["comment_id"]
-                        for c in tgt_file["comments"]
-                        if c.get("comment_id") is not None
-                    }
+                    existing_ids = {c["comment_id"] for c in tgt_file["comments"] if c.get("comment_id") is not None}
                     for comment in file_entry["comments"]:
                         cid = comment.get("comment_id")
                         if cid is not None and cid in existing_ids:
@@ -93,7 +93,8 @@ def prune_empty_dataset(dataset: MutableMapping[str, Any]) -> None:
         for pr_number in list(pr_map.keys()):
             commits = pr_map[pr_number]["commits"]
             for commit in list(commits.keys()):
-                if not commits[commit]:
+                real_keys = [k for k in commits[commit] if k not in {"metadata_files", "file_tree"}]
+                if not real_keys:
                     del commits[commit]
             if not commits:
                 del pr_map[pr_number]

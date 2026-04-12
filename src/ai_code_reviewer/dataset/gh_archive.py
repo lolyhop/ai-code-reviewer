@@ -6,16 +6,18 @@ import io
 import json
 import logging
 import re
+from collections.abc import MutableMapping
 from datetime import datetime, timedelta
-from typing import Any, MutableMapping
+from typing import Any
 
 import aiohttp
 from tqdm import tqdm
 
+import ai_code_reviewer.dataset.dataset_utils as dataset_utils
+import ai_code_reviewer.dataset.http as http
+import ai_code_reviewer.dataset.paths as path_utils
 from ai_code_reviewer.dataset import config
-from ai_code_reviewer.dataset.dataset_utils import make_dataset, merge_datasets
-from ai_code_reviewer.dataset.http import async_http_get_bytes
-from ai_code_reviewer.dataset.paths import normalize_repo_rel_path
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +56,7 @@ def get_hunk_context_bounds(diff_hunk: str) -> tuple[int | None, int | None]:
             The diff_hunk to parse.
 
     Returns:
-        A tuple containing:
-            - The context start line
-            - The context end line
+        Context window ``(start_line, end_line)``, or ``(None, None)`` on parse failure.
     """
     if not diff_hunk:
         return None, None
@@ -72,7 +72,7 @@ def get_hunk_context_bounds(diff_hunk: str) -> tuple[int | None, int | None]:
     current_line = context_start_line - 1
 
     for line in lines[1:]:
-        if line.startswith(" ") or line.startswith("+"):
+        if line.startswith((" ", "+")):
             current_line += 1
     context_end_line = current_line
 
@@ -89,9 +89,9 @@ def parse_gh_archive_hour_bytes(compressed_data: bytes) -> MutableMapping[str, A
             Raw gzip-compressed NDJSON body.
 
     Returns:
-        Nested dataset mapping for this hour (same shape as `make_dataset()`).
+        Nested dataset mapping for this hour (same shape as `dataset_utils.make_dataset()`).
     """
-    dataset = make_dataset()
+    dataset = dataset_utils.make_dataset()
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(compressed_data)) as gz:
             for line in gz:
@@ -155,14 +155,12 @@ def parse_gh_archive_hour_bytes(compressed_data: bytes) -> MutableMapping[str, A
                         head_start_line = original_line
                         head_end_line = original_line
                     else:
-                        head_start_line, head_end_line = get_hunk_context_bounds(
-                            diff_hunk
-                        )
+                        head_start_line, head_end_line = get_hunk_context_bounds(diff_hunk)
 
                     if head_start_line is None or head_end_line is None:
                         continue
 
-                    path_norm = normalize_repo_rel_path(path)
+                    path_norm = path_utils.normalize_repo_rel_path(path)
                     if path_norm is None or not path_norm.endswith(".py"):
                         continue
 
@@ -207,12 +205,10 @@ async def fetch_pr_comments_for_hour(
         A dictionary containing the dataset.
     """
     url = f"{config.GH_ARCHIVE_API_BASE}/{date_hour.strftime('%Y-%m-%d-%-H')}.json.gz"
-    dataset = make_dataset()
+    dataset = dataset_utils.make_dataset()
 
     try:
-        status, compressed_data = await async_http_get_bytes(
-            session, url, semaphore=semaphore
-        )
+        status, compressed_data = await http.async_http_get_bytes(session, url, semaphore=semaphore)
         if status != 200:
             return dataset
 
@@ -256,9 +252,7 @@ async def fetch_pr_comments_range(
     start_h = start.replace(minute=0, second=0, microsecond=0)
     end_h = end.replace(minute=0, second=0, microsecond=0)
     if start_h > end_h:
-        raise ValueError(
-            f"start hour {start_h!r} is after end hour {end_h!r} after normalization"
-        )
+        raise ValueError(f"start hour {start_h!r} is after end hour {end_h!r} after normalization")
     hours: list[datetime] = []
     cur = start_h
     while cur <= end_h:
@@ -267,10 +261,10 @@ async def fetch_pr_comments_range(
 
     n = len(hours)
     if n == 0:
-        return make_dataset()
+        return dataset_utils.make_dataset()
 
     worker_count = min(n, config.GH_ARCHIVE_CONCURRENCY)
-    results: list[MutableMapping[str, Any]] = [make_dataset() for _ in range(n)]
+    results: list[MutableMapping[str, Any]] = [dataset_utils.make_dataset() for _ in range(n)]
     work_queue: asyncio.Queue[tuple[int, datetime] | None] = asyncio.Queue()
     for i, hour in enumerate(hours):
         await work_queue.put((i, hour))
@@ -284,9 +278,7 @@ async def fetch_pr_comments_range(
                 break
             idx, hour = item
             try:
-                results[idx] = await fetch_pr_comments_for_hour(
-                    session, hour, semaphore
-                )
+                results[idx] = await fetch_pr_comments_for_hour(session, hour, semaphore)
             except Exception as exc:
                 logger.error("Hour fetch failed for %s: %s", hour, exc)
             finally:
@@ -297,9 +289,9 @@ async def fetch_pr_comments_range(
             *(_hour_worker(pbar) for _ in range(worker_count)),
         )
 
-    merged = make_dataset()
+    merged = dataset_utils.make_dataset()
     for part in results:
-        merge_datasets(merged, part)
+        dataset_utils.merge_datasets(merged, part)
     return merged
 
 
@@ -307,39 +299,27 @@ def filter_dataset_by_top_snapshot_commits(
     dataset: MutableMapping[str, Any],
     snapshot_commits_to_keep: int,
 ) -> MutableMapping[str, Any]:
-    """Keep the top-N `(repo, PR, snapshot_commit)` triples globally by comment count.
+    """Keep the top-N ``(repo, PR, snapshot_commit)`` triples globally by comment count.
 
-    For every triple, counts all comments under that `snapshot_commit` (summed
-    across paths), sorts all triples by that count descending, takes the first
-    `snapshot_commits_to_keep` triples, and copies only those commits into a
-    new dataset with the same shape as `make_dataset()`.
-
-    When counts tie, ordering is by `repo_name`, then `pr_number`, then
-    `snapshot_commit` (all ascending) for reproducibility.
-
-    PRs with no kept commits are omitted, as are repos with no PRs left. If
-    `snapshot_commits_to_keep` is 0, returns an empty `make_dataset()` tree.
-
-    Paths with no comments are skipped (defensive; ingestion uses normalized keys).
+    Ties are broken by ``(repo_name, pr_number, snapshot_commit)`` ascending for
+    reproducibility.  PRs and repos with no retained commits are dropped.
 
     Args:
         dataset:
             Dataset to filter.
         snapshot_commits_to_keep:
-            Number of `(repo, PR, snapshot_commit)` triples to retain globally
-            (non-negative).
+            Number of ``(repo, PR, snapshot_commit)`` triples to retain (non-negative).
+            Pass 0 to return an empty dataset.
 
     Returns:
-        A new dataset with `defaultdict` structure matching `make_dataset()`.
+        New dataset with ``defaultdict`` structure matching ``dataset_utils.make_dataset()``.
 
     Raises:
         ValueError:
-            If `snapshot_commits_to_keep` is negative.
+            If ``snapshot_commits_to_keep`` is negative.
     """
     if snapshot_commits_to_keep < 0:
-        raise ValueError(
-            f"snapshot_commits_to_keep must be >= 0, got {snapshot_commits_to_keep}"
-        )
+        raise ValueError(f"snapshot_commits_to_keep must be >= 0, got {snapshot_commits_to_keep}")
 
     scored: list[tuple[str, str, str, int]] = []
     for repo_name, pr_map in dataset.items():
@@ -351,7 +331,7 @@ def filter_dataset_by_top_snapshot_commits(
     scored.sort(key=lambda t: (-t[3], t[0], t[1], t[2]))
     keep = {(r, p, s) for r, p, s, _ in scored[:snapshot_commits_to_keep]}
 
-    out = make_dataset()
+    out = dataset_utils.make_dataset()
     for repo_name, pr_map in dataset.items():
         for pr_number, pr_entry in pr_map.items():
             tgt_pr = None
@@ -364,9 +344,7 @@ def filter_dataset_by_top_snapshot_commits(
                 for path, file_entry in path_map.items():
                     if len(file_entry.get("comments", [])) == 0:
                         continue
-                    out_entry: dict[str, Any] = {
-                        "comments": list(file_entry["comments"])
-                    }
+                    out_entry: dict[str, Any] = {"comments": list(file_entry["comments"])}
                     for key in ("base_content", "patch", "patched_content"):
                         if key in file_entry:
                             out_entry[key] = file_entry[key]

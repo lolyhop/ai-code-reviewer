@@ -24,7 +24,7 @@ In other words, the baseline gives us the first working version of the reviewer.
 
 Our project is limited by available compute, so model selection is constrained not only by benchmark quality, but also by hardware.
 
-We have access to a single **NVIDIA A100 with 40 GB VRAM**. This is enough for inference and for fine-tuning small models, but it still does not allow us to comfortably train larger LLMs without strong memory constraints.
+We have access to a single **NVIDIA A100 with 80 GB VRAM**. This is enough for inference and for full fine-tuning of small models with longer context, but it still does not allow us to comfortably train larger LLMs without strong memory constraints.
 
 When estimating whether a model can be trained on our hardware, we account for more than just model weights. During training, GPU memory is used for:
 - model weights;
@@ -45,15 +45,33 @@ So the memory needed only for model states is:
 - **2B parameters** -> about **36 GB**
 - **4B parameters** -> about **72 GB**
 
-Our GPU has **40 GB VRAM**, which means that a **2B** model can fit for full fine-tuning in mixed precision by model states alone.
+Our GPU has **80 GB VRAM**, which means that even a **4B** model could fit for full fine-tuning by model states alone, and a **2B** model leaves substantial headroom for activations.
 
-During the Data Preparation stage, we estimated the target input length for our system. A single review prompt includes the changed file context, pull request metadata, repository-level metadata, up to **3 imported-code snippets**, up to **3 usage-site snippets**, and the task instruction. Based on this prompt structure, we use **4096 tokens** as the target context length for training and inference.
+### Activation memory and context length
+
+After subtracting model states from GPU memory, the remainder is available for activation memory, which scales linearly with sequence length (assuming gradient checkpointing and Flash Attention). For **Qwen3-1.7B** on an **A100 80 GB**:
+
+- Model states: **1.7B × 18 bytes ≈ 30.6 GB**
+- CUDA overhead (buffers, fragmentation): **~2 GB**
+- Remaining for activations: **80 − 30.6 − 2 ≈ 47.4 GB**
+
+For comparison, an A100 40 GB would leave only ~7 GB for activations, enough for roughly 4K tokens. With 47.4 GB (about **6.7× more**), we can scale proportionally:
+
+| Context length | Activation estimate | Fits on A100 80 GB? |
+|---:|---:|---|
+| 4,096 | ~7 GB | Yes (comfortable) |
+| 8,192 | ~14 GB | Yes (comfortable) |
+| 16,384 | ~28 GB | Yes |
+| 24,576 | ~42 GB | Tight |
+| 32,768 | ~56 GB | No |
+
+During the Data Preparation stage, we estimated the target input length for our system. A single review prompt includes the changed file context, pull request metadata, repository-level metadata, up to **3 imported-code snippets**, up to **3 usage-site snippets**, and the task instruction. Based on this prompt structure and the activation budget above, we use **16,384 tokens** as the target context length for training and inference. This covers approximately **75–80%** of the samples in our dataset after applying context compression heuristics.
 
 So our baseline model must satisfy four requirements:
 
-- it must fit on a single **A100 40 GB** GPU;
-- it must support inference on inputs up to **4096 tokens**;
-- it must be suitable for parameter-efficient fine-tuning (PEFT);
+- it must fit on a single **A100 80 GB** GPU;
+- it must support inference on inputs up to **16,384 tokens**;
+- it must be suitable for full fine-tuning or parameter-efficient fine-tuning (PEFT);
 - it must have strong **code understanding ability**.
 
 These constraints narrow our search to compact code-oriented models in the **1.5B–2B range**.

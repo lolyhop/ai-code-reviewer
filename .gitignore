@@ -208,6 +208,7 @@ __marimo__/
 
 # EDA dataset checkpoints
 data/checkpoints/
+data/
 
 # Various data files
 *.json
@@ -217,7 +218,10 @@ data/checkpoints/
 *.xls
 *.xlsx
 *.gz
+*.zst
 *.tar
+temp.ipynb
+temp.txt
 
 # Mac OS files
 .DS_Store

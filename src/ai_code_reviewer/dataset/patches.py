@@ -1,13 +1,32 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import MutableMapping
+from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any, MutableMapping
+from typing import Any
 
 from whatthepatch import apply_diff, parse_patch
 from whatthepatch.exceptions import HunkApplyException
 
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PatchedContentResult:
+    """Result of :func:`compute_patched_content`.
+
+    Attributes:
+        annotated: Full-file annotated diff view with `-`/`+` line prefixes.
+        head_text: Clean HEAD file content after applying the patch (no markers).
+        head_to_annotated: Mapping from 0-based HEAD line index to 0-based
+            annotated view line index.
+    """
+
+    annotated: str
+    head_text: str
+    head_to_annotated: list[int]
 
 
 def full_file_annotated_diff(base_text: str, head_text: str) -> str:
@@ -21,7 +40,7 @@ def full_file_annotated_diff(base_text: str, head_text: str) -> str:
             patch applier).
 
     Returns:
-        Patched file content
+        Annotated diff string with unchanged lines unmarked and edits prefixed with ``-``/``+``.
     """
     a = base_text.splitlines(keepends=True)
     b = head_text.splitlines(keepends=True)
@@ -60,7 +79,7 @@ def map_head_lines_to_annotated_indices(
     head_to_annotated = [0] * len(head_lines)
     annotated_idx = 0
     for tag, i1, i2, j1, j2 in SequenceMatcher(
-        None, base_lines, head_lines
+        None, base_lines, head_lines,
     ).get_opcodes():
         if tag == "equal":
             for j in range(j1, j2):
@@ -152,8 +171,8 @@ def compute_patched_content(
     base_content: str,
     patch: str,
     path: str,
-) -> tuple[str | None, list[int] | None]:
-    """Return annotated full-file view and HEAD-to-annotated line mapping.
+) -> PatchedContentResult | None:
+    """Return annotated full-file view, clean HEAD text, and HEAD-to-annotated mapping.
 
     Args:
         base_content:
@@ -164,37 +183,44 @@ def compute_patched_content(
             Repo-relative path (for logs only).
 
     Returns:
-        `(annotated_string, head_to_annotated)` where `head_to_annotated[j]` is the
-        0-based line index in the annotated string for HEAD line `j` (0-based).
-        Both are `None` if the patch could not be applied.
+        :class:`PatchedContentResult` on success, or `None` if the patch could
+        not be applied cleanly.
     """
     try:
         head = apply_unified_patch(base_content, patch)
     except (HunkApplyException, ValueError) as exc:
         logger.warning("could not apply patch for %s: %s", path, exc)
-        return None, None
+        return None
     base_norm = _with_trailing_newline(base_content)
     head_norm = _with_trailing_newline(head)
     a = base_norm.splitlines(keepends=True)
     b = head_norm.splitlines(keepends=True)
     head_to_annotated = map_head_lines_to_annotated_indices(a, b)
     annotated = full_file_annotated_diff(base_norm, head_norm)
-    return annotated, head_to_annotated
+    return PatchedContentResult(
+        annotated=annotated,
+        head_text=head,
+        head_to_annotated=head_to_annotated,
+    )
 
 
 def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> None:
-    """Set `patched_content` and per-comment `annotated_*` line fields.
+    """Set ``patched_content`` and per-comment ``annotated_*`` line fields.
+
+    Standalone utility for applying patches outside the main enrichment pipeline.
+    The canonical pipeline uses :func:`github_api.enrich_dataset_with_code`,
+    which performs this step inline as phase 4.
 
     Args:
         dataset:
             Nested mapping produced by the EDA pipeline after base/patch enrichment.
     """
-    for _, pr_map in dataset.items():
-        for _pr_number, pr_entry in pr_map.items():
+    for pr_map in dataset.values():
+        for pr_entry in pr_map.values():
             commits = pr_entry.get("commits")
             if not commits:
                 continue
-            for _snapshot, path_map in commits.items():
+            for path_map in commits.values():
                 for path, file_entry in path_map.items():
                     if "base_content" not in file_entry or "patch" not in file_entry:
                         continue
@@ -202,22 +228,20 @@ def enrich_dataset_with_patched_content(dataset: MutableMapping[str, Any]) -> No
                     patch = file_entry["patch"]
                     if patch is None:
                         continue
-                    patched, head_to_annotated = compute_patched_content(
-                        base if isinstance(base, str) else "",
-                        patch if isinstance(patch, str) else "",
-                        path,
-                    )
-                    if patched is None or head_to_annotated is None:
+                    base_str = base if isinstance(base, str) else ""
+                    patch_str = patch if isinstance(patch, str) else ""
+                    result = compute_patched_content(base_str, patch_str, path)
+                    if result is None:
                         for comment in file_entry["comments"]:
                             comment["annotated_start_line"] = None
                             comment["annotated_end_line"] = None
                         continue
-                    file_entry["patched_content"] = patched
+                    file_entry["patched_content"] = result.annotated
                     for comment in file_entry["comments"]:
                         a_s, a_e = head_blob_range_to_annotated_1based(
                             comment.get("head_start_line"),
                             comment.get("head_end_line"),
-                            head_to_annotated,
+                            result.head_to_annotated,
                         )
                         comment["annotated_start_line"] = a_s
                         comment["annotated_end_line"] = a_e

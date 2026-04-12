@@ -11,12 +11,108 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9.0",
     "ipykernel>=6.0.0",
+    "orjson>=3.9.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.0",
     "tqdm>=4.0",
     "whatthepatch>=1.0.0",
+    "zstandard>=0.22.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.19.0",
+    "nbdime>=4.0.0",
+    "nbqa>=1.9.0",
+    "ruff>=0.15.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+ai_code_reviewer = ["py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["ai_code_reviewer*"]
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+ignore_missing_imports = true
+follow_imports = "silent"
+plugins = ["pydantic.mypy"]
+
+[tool.ruff]
+indent-width = 4
+line-length = 120
+respect-gitignore = true
+src = ["src"]
+target-version = "py310"
+
+[tool.ruff.format]
+line-ending = "auto"
+quote-style = "double"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+select = [
+    "A", # flake8-builtins
+    "ASYNC", # flake8-async
+    "B", # flake8-bugbear
+    "DTZ", # flake8-datetimez
+    "COM", # flake8-commas
+    "E", # pycodestyle errors
+    "ERA", # commented-out-code
+    "F", # pyflakes
+    "FAST", # FastAPI
+    "G", # flake8-logging-format
+    "ICN", # flake8-import-conventions
+    "I", # isort
+    "INP", # flake8-no-pep420
+    "ISC", # flake8-implicit-str-concat
+    "PD003", # pandas-use-of-dot-is-null
+    "PD004", # pandas-use-of-dot-not-null
+    "PD007", # pandas-use-of-dot-ix
+    "PD011", # pandas-use-of-dot-values
+    "PERF", # Perflint
+    "PGH", # pygrep-hooks
+    "PIE", # flake8-pie
+    "PT", # flake8-pytest-style
+    "PTH", # flake8-use-pathlib
+    "PYI", # flake8-pyi
+    "Q", # flake8-quotes
+    "RET", # flake8-return
+    "RSE", # unnecessary-paren-on-raise-exception
+    "RUF", # Ruff-specific rules
+    "SIM", # flake8-simplify
+    "T20", # flake8-print
+    "UP", # pyupgrade
+    "W", # pycodestyle warnings
+]
+ignore = [
+    "RUF001", # ambiguous-unicode-character-string
+    "B905", # zip-without-explicit-strict
+    "PD", # pandas-vet, except for selected
+    "PTH123", # builtin-open
+    "RET504", # unnecessary-assign
+    "SIM105", # suppressible-exception
+    "SIM108", # if-else-block-instead-of-if-exp
+    "UP032", # f-string
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-decorators = ["typing.overload"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
