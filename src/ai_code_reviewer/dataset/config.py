@@ -32,8 +32,8 @@ GITHUB_API_BASE: str = "https://api.github.com"
 GITHUB_GRAPHQL_API: str = "https://api.github.com/graphql"
 
 # Skip blobs larger than this when reading from zipballs (GitHub contents API parity).
-FILE_MAX_BYTES: int = 5 * 1024 * 1024
-ZIPBALL_MAX_BYTES: int = 100 * 1024 * 1024
+FILE_MAX_BYTES: int = 2 * 1024 * 1024
+ZIPBALL_MAX_BYTES: int = 50 * 1024 * 1024
 
 # Source-root prefixes tried when resolving absolute Python imports.
 # The empty string represents the repository root itself; "src" covers the
@@ -59,8 +59,8 @@ INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 30
 # dependencies (for example `pkg/__init__.py -> pkg/sub/__init__.py -> pkg/mod.py`).
 OUTGOING_REEXPORT_MAX_DEPTH: int = 4
 
-GH_ARCHIVE_CONCURRENCY: int = 5
-GITHUB_API_CONCURRENCY: int = 5
+GH_ARCHIVE_CONCURRENCY: int = 10
+GITHUB_API_CONCURRENCY: int = 10
 
 GITHUB_RATE_LIMIT_MIN_REMAINING: int = 100
 GITHUB_RATE_LIMIT_BACKOFF_ENABLED: bool = True
@@ -83,23 +83,23 @@ METADATA_FILE_NAMES: list[str] = [
 # review comments, capped at the number of commented files in that snapshot.
 INCLUDE_NO_COMMENT_FILES: bool = True
 
-HTTP_JSON_TIMEOUT_TOTAL: float = 120.0
+HTTP_JSON_TIMEOUT_TOTAL: float = 20.0
 HTTP_JSON_TIMEOUT_CONNECT: float = 20.0
 HTTP_JSON_TIMEOUT_SOCK_CONNECT: float = 20.0
-HTTP_JSON_TIMEOUT_SOCK_READ: float = 60.0
+HTTP_JSON_TIMEOUT_SOCK_READ: float = 20.0
 
 # Timeout profile for zipball downloads and large archive reads.
-HTTP_ZIP_TIMEOUT_TOTAL: float = 360.0
+HTTP_ZIP_TIMEOUT_TOTAL: float = 120.0
 HTTP_ZIP_TIMEOUT_CONNECT: float = 30.0
 HTTP_ZIP_TIMEOUT_SOCK_CONNECT: float = 30.0
-HTTP_ZIP_TIMEOUT_SOCK_READ: float = 180.0
+HTTP_ZIP_TIMEOUT_SOCK_READ: float = 120.0
 
-HTTP_MAX_RETRY_ATTEMPTS: int = 6
+HTTP_MAX_RETRY_ATTEMPTS: int = 1
 HTTP_RETRY_STATUSES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 HTTP_RETRY_AFTER_CAP_SECONDS: float = 120.0
 HTTP_EXP_WAIT_MULTIPLIER: float = 1.0
 HTTP_EXP_WAIT_MIN_SECONDS: float = 2.0
-HTTP_EXP_WAIT_MAX_SECONDS: float = 60.0
+HTTP_EXP_WAIT_MAX_SECONDS: float = 30.0
 
 # Extra slots above semaphore concurrency for aiohttp connector limit (keep small).
 HTTP_CONNECTOR_LIMIT_BUFFER: int = 2

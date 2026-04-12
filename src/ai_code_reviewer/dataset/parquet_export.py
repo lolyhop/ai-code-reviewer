@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -14,24 +14,23 @@ logger = logging.getLogger(__name__)
 def path_content_dict_to_rows(
     d: Mapping[str, str] | dict[str, str] | None,
 ) -> list[dict[str, str]]:
-    """Convert a path→text map to sorted list rows ``{path, patched_content}``.
+    """Convert a path→text map to sorted list rows ``{path, content}``.
 
-    Used for ``outgoing_dependencies``, ``incoming_dependencies``, and
-    ``metadata_files``. Empty or missing maps become ``[]`` so Parquet column
-    types stay stable.
+    Used only for nested columns ``outgoing_dependencies``, ``incoming_dependencies``,
+    and ``metadata_files``. The main reviewed file per row still uses the top-level
+    ``patched_content`` column in :func:`build_files_list_rows`.
 
     Args:
         d:
-            Mapping from repository-relative path to file text (patched, raw
-            snapshot, or annotated diff depending on enrichment phase).
+            Mapping from repository-relative path to file text at snapshot commit
+            (raw text for dependencies and metadata; not the annotated diff view).
 
     Returns:
-        List of dicts with keys ``path`` and ``patched_content``, sorted by
-        ``path``.
+        List of dicts with keys ``path`` and ``content``, sorted by ``path``.
     """
     if not d:
         return []
-    return [{"path": p, "patched_content": d[p]} for p in sorted(d)]
+    return [{"path": p, "content": d[p]} for p in sorted(d)]
 
 
 def _normalize_patched_content(text: str) -> str:
@@ -184,7 +183,15 @@ def save_files_list_parquet(
     final_path.parent.mkdir(parents=True, exist_ok=True)
     rows, stats = build_files_list_rows(dataset)
     df = pd.DataFrame(rows)
-    df.to_parquet(final_path, engine="pyarrow", compression="zstd", index=False)
+    df = df.dropna()
+    df = df[df["patched_content"].str.len() != 0]
+    df = df[df["patched_content"].str.len() != 0]
+    df.to_parquet(
+        final_path,
+        engine="pyarrow",
+        compression=cast(Any, "zstd"),
+        index=False,
+    )
     logger.info(
         "Wrote files_list Parquet (%d rows, %d raw before dedupe) -> %s",
         stats["rows_kept_total"],

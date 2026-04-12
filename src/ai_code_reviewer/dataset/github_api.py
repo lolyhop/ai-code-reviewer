@@ -54,9 +54,7 @@ def _incoming_import_target_variants(
     """
     # Non-empty roots only: the empty-string (repo-root) form is excluded
     # because the direct normalised path already covers that case.
-    effective_roots = (
-        source_roots if source_roots is not None else config.IMPORT_SOURCE_ROOTS
-    )
+    effective_roots = source_roots if source_roots is not None else config.IMPORT_SOURCE_ROOTS
     non_empty_roots: tuple[str, ...] = tuple(r for r in effective_roots if r)
 
     norm = path_utils.normalize_repo_rel_path(changed_path)
@@ -107,9 +105,7 @@ def _prune_intermediate_init_paths(paths: set[str]) -> tuple[set[str], int]:
             continue
         package_dir = candidate.removesuffix("/__init__.py")
         package_prefix = f"{package_dir}/"
-        has_deeper_path = any(
-            other != candidate and other.startswith(package_prefix) for other in paths
-        )
+        has_deeper_path = any(other != candidate and other.startswith(package_prefix) for other in paths)
         if has_deeper_path and candidate in kept:
             kept.remove(candidate)
             removed += 1
@@ -620,9 +616,7 @@ async def _resolve_outgoing_fact_paths(
             )
             next_norm: set[str] = {
                 p
-                for p in (
-                    path_utils.normalize_repo_rel_path(candidate) for candidate in candidates
-                )
+                for p in (path_utils.normalize_repo_rel_path(candidate) for candidate in candidates)
                 if p is not None and p.endswith(".py")
             }
             next_paths = frozenset(next_norm)
@@ -779,15 +773,13 @@ async def fetch_paths_and_metadata_from_zipball(
         return status, {}, {}, {}
 
     def _extract_all() -> tuple[
-        dict[str, str | None], dict[str, str], dict[str, str | None],
+        dict[str, str | None],
+        dict[str, str],
+        dict[str, str | None],
     ]:
         path_mapping = _extract_files_from_zip_bytes(data, paths) if paths else {}
-        meta_mapping = (
-            _scan_metadata_in_zip_bytes(data, metadata_names) if metadata_names else {}
-        )
-        usage_mapping = (
-            _scan_symbol_usages_in_zip_bytes(data, symbols) if symbols else {}
-        )
+        meta_mapping = _scan_metadata_in_zip_bytes(data, metadata_names) if metadata_names else {}
+        usage_mapping = _scan_symbol_usages_in_zip_bytes(data, symbols) if symbols else {}
         return path_mapping, meta_mapping, usage_mapping
 
     path_mapping, meta_mapping, usage_mapping = await asyncio.to_thread(_extract_all)
@@ -833,10 +825,7 @@ async def fetch_compare_patches(
             - A boolean indicating whether the compare returned exactly 300
               files (possible truncation per GitHub).
     """
-    url = (
-        f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/compare/"
-        f"{base_commit}...{head_commit}"
-    )
+    url = f"{config.GITHUB_API_BASE}/repos/{owner}/{repo}/compare/{base_commit}...{head_commit}"
     status, data = await http.async_http_get_json(
         session,
         url,
@@ -937,9 +926,7 @@ async def gather_compare_patches_bounded(
         None,
     ] * n
     worker_count = min(n, config.GITHUB_API_CONCURRENCY)
-    work_queue: asyncio.Queue[tuple[int, tuple[str, str, str]] | object] = (
-        asyncio.Queue()
-    )
+    work_queue: asyncio.Queue[tuple[int, tuple[str, str, str]] | object] = asyncio.Queue()
     for i, meta in enumerate(compare_metas):
         await work_queue.put((i, meta))
     for _ in range(worker_count):
@@ -998,11 +985,7 @@ def _augment_snapshot_with_no_comment_files(
     candidates: list[str] = [
         path_norm
         for path_norm, cinfo in cmap.items()
-        if (
-            path_norm.endswith(".py")
-            and cinfo.get("patch")
-            and path_norm not in path_map
-        )
+        if (path_norm.endswith(".py") and cinfo.get("patch") and path_norm not in path_map)
     ]
     if not candidates:
         return
@@ -1066,9 +1049,7 @@ async def _enrich_one_repo(
         base_commit = pr_entry.get("base_commit")
         if not base_commit:
             continue
-        compare_metas.extend(
-            (pr_number, base_commit, sc) for sc in pr_entry["commits"]
-        )
+        compare_metas.extend((pr_number, base_commit, sc) for sc in pr_entry["commits"])
 
     compare_results: list[tuple[str, str, str, dict[str, dict[str, Any]], bool]] = []
     if compare_metas:
@@ -1143,17 +1124,15 @@ async def _enrich_one_repo(
 
     # base_commit → {path: content | None}  (Python file base content)
     base_caches: dict[str, dict[str, str | None]] = {}
-    # base_commit → {repo_rel_path: content}  (metadata file base content)
-    base_metadata_caches: dict[str, dict[str, str]] = {}
 
     async def fetch_one_base(
         base_commit: str,
-    ) -> tuple[str, int, dict[str, str | None], dict[str, str]]:
+    ) -> tuple[str, int, dict[str, str | None]]:
         paths_needed = base_to_paths.get(base_commit, set())
         (
             status,
             path_mapping,
-            meta_mapping,
+            _meta_mapping,
             _usage,
         ) = await fetch_paths_and_metadata_from_zipball(
             owner,
@@ -1165,11 +1144,11 @@ async def _enrich_one_repo(
             semaphore,
             headers,
         )
-        return base_commit, status, path_mapping, meta_mapping
+        return base_commit, status, path_mapping
 
     all_base_list = list(all_base_commits)
     zip_tasks = [fetch_one_base(bs) for bs in all_base_list]
-    zip_results: list[tuple[str, int, dict[str, str | None], dict[str, str]]] = []
+    zip_results: list[tuple[str, int, dict[str, str | None]]] = []
     if zip_tasks:
         zip_raw = await asyncio.gather(*zip_tasks, return_exceptions=True)
         for bs, res in zip(all_base_list, zip_raw):
@@ -1180,11 +1159,11 @@ async def _enrich_one_repo(
                     bs[:7],
                     res,
                 )
-                zip_results.append((bs, 599, {}, {}))
+                zip_results.append((bs, 599, {}))
             else:
                 zip_results.append(res)
 
-    for base_commit, status, path_map_result, meta_map_result in zip_results:
+    for base_commit, status, path_map_result in zip_results:
         if status != 200:
             if base_to_paths.get(base_commit):
                 # Only drop PRs when we actually needed Python base content.
@@ -1199,15 +1178,13 @@ async def _enrich_one_repo(
                         del dataset[repo_name][pr_number]
             else:
                 logger.warning(
-                    "Base zipball (metadata-only) failed for %s @ %s: HTTP %s; "
-                    "metadata diffs will be skipped.",
+                    "Base zipball (metadata-only) failed for %s @ %s: HTTP %s; metadata diffs will be skipped.",
                     repo_name,
                     base_commit[:7],
                     status,
                 )
         else:
             base_caches[base_commit] = path_map_result
-            base_metadata_caches[base_commit] = meta_map_result
 
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
@@ -1242,7 +1219,9 @@ async def _enrich_one_repo(
                     file_entry["patch"] = patch
                 else:
                     base_text = _resolve_base_text_from_cache(
-                        base_cache, path_norm, cinfo,
+                        base_cache,
+                        path_norm,
+                        cinfo,
                     )
                     if base_text is None:
                         del pr_entry["commits"][snapshot_commit][path]
@@ -1301,15 +1280,17 @@ async def _enrich_one_repo(
             if _pf_status == 200:
                 commit_to_zip_bytes[_sc] = _pf_data
                 commit_to_source_roots[_sc] = await asyncio.to_thread(
-                    _infer_source_roots_from_zip_manifest, _pf_data,
+                    _infer_source_roots_from_zip_manifest,
+                    _pf_data,
                 )
                 commit_to_file_tree[_sc] = await asyncio.to_thread(
-                    _build_repo_tree_string_from_zip_bytes, _pf_data, repo,
+                    _build_repo_tree_string_from_zip_bytes,
+                    _pf_data,
+                    repo,
                 )
             else:
                 logger.warning(
-                    "Snapshot zip prefetch HTTP %s for %s @ %s; "
-                    "deps and metadata will be empty for this commit.",
+                    "Snapshot zip prefetch HTTP %s for %s @ %s; deps and metadata will be empty for this commit.",
                     _pf_status,
                     repo_name,
                     _sc[:7],
@@ -1338,7 +1319,8 @@ async def _enrich_one_repo(
         path_map: MutableMapping[str, Any],
     ) -> tuple[str, set[str], set[str], set[str]]:
         _commit_source_roots = commit_to_source_roots.get(
-            snapshot_commit, config.IMPORT_SOURCE_ROOTS,
+            snapshot_commit,
+            config.IMPORT_SOURCE_ROOTS,
         )
         snapshot_dep_candidates: set[str] = set()
         snapshot_changed_symbols: set[str] = set()
@@ -1353,7 +1335,9 @@ async def _enrich_one_repo(
                 continue
 
             result: patches.PatchedContentResult | None = patches.compute_patched_content(
-                base_str, patch_str, path,
+                base_str,
+                patch_str,
+                path,
             )
             if result is None:
                 for comment in file_entry.get("comments", []):
@@ -1376,7 +1360,9 @@ async def _enrich_one_repo(
                 continue
 
             used_facts, used_unresolvable = import_resolution.resolve_used_import_facts(
-                result.head_text, path, _commit_source_roots,
+                result.head_text,
+                path,
+                _commit_source_roots,
             )
             if used_unresolvable:
                 logger.debug(
@@ -1385,10 +1371,7 @@ async def _enrich_one_repo(
                     used_unresolvable,
                 )
             used_candidates = {
-                cand
-                for fact in used_facts
-                for cand in fact.candidate_paths
-                if cand.endswith(".py") and cand != path
+                cand for fact in used_facts for cand in fact.candidate_paths if cand.endswith(".py") and cand != path
             }
             if used_facts:
                 file_entry["_dep_usage_facts"] = used_facts
@@ -1397,7 +1380,9 @@ async def _enrich_one_repo(
                 snapshot_dep_candidates |= used_candidates
             elif used_unresolvable > 0:
                 broad_candidates, unresolvable = import_resolution.resolve_import_candidates(
-                    result.head_text, path, _commit_source_roots,
+                    result.head_text,
+                    path,
+                    _commit_source_roots,
                 )
                 if unresolvable:
                     logger.debug(
@@ -1405,9 +1390,7 @@ async def _enrich_one_repo(
                         path,
                         unresolvable,
                     )
-                broad_candidates = {
-                    c for c in broad_candidates if c.endswith(".py") and c != path
-                }
+                broad_candidates = {c for c in broad_candidates if c.endswith(".py") and c != path}
                 if broad_candidates:
                     file_entry["_dep_candidates"] = broad_candidates
                     snapshot_dep_candidates |= broad_candidates
@@ -1420,9 +1403,7 @@ async def _enrich_one_repo(
             )
             if raw_symbols:
                 capped: frozenset[str] = frozenset(
-                    sorted(raw_symbols, key=len, reverse=True)[
-                        : config.INCOMING_DEP_MAX_SYMBOLS_PER_FILE
-                    ],
+                    sorted(raw_symbols, key=len, reverse=True)[: config.INCOMING_DEP_MAX_SYMBOLS_PER_FILE],
                 )
                 file_entry["_changed_symbols"] = capped
                 snapshot_changed_symbols |= set(capped)
@@ -1442,9 +1423,7 @@ async def _enrich_one_repo(
     phase45_tasks = [
         asyncio.to_thread(_phase45_process_snapshot, snapshot_commit, path_map)
         for pr_number in list(dataset[repo_name].keys())
-        for snapshot_commit, path_map in dataset[repo_name][pr_number][
-            "commits"
-        ].items()
+        for snapshot_commit, path_map in dataset[repo_name][pr_number]["commits"].items()
     ]
     phase45_results = await asyncio.gather(*phase45_tasks)
     for (
@@ -1486,31 +1465,13 @@ async def _enrich_one_repo(
         ]:
             if zip_data is None:
                 return {}, {}, {}, {}
-            path_mapping = (
-                _extract_files_from_zip_bytes(zip_data, paths_needed)
-                if paths_needed
-                else {}
-            )
-            meta_mapping = (
-                _scan_metadata_in_zip_bytes(zip_data, _metadata_names)
-                if _metadata_names
-                else {}
-            )
-            usage_mapping = (
-                _scan_symbol_usages_in_zip_bytes(zip_data, snapshot_symbols)
-                if snapshot_symbols
-                else {}
-            )
+            path_mapping = _extract_files_from_zip_bytes(zip_data, paths_needed) if paths_needed else {}
+            meta_mapping = _scan_metadata_in_zip_bytes(zip_data, _metadata_names) if _metadata_names else {}
+            usage_mapping = _scan_symbol_usages_in_zip_bytes(zip_data, snapshot_symbols) if snapshot_symbols else {}
             # Extract __init__.py files for the re-export map; filter out
             # None values (missing files produce None from the extractor).
-            init_raw = (
-                _extract_files_from_zip_bytes(zip_data, init_paths)
-                if init_paths
-                else {}
-            )
-            init_mapping: dict[str, str] = {
-                p: c for p, c in init_raw.items() if c is not None
-            }
+            init_raw = _extract_files_from_zip_bytes(zip_data, init_paths) if init_paths else {}
+            init_mapping: dict[str, str] = {p: c for p, c in init_raw.items() if c is not None}
             return path_mapping, meta_mapping, usage_mapping, init_mapping
 
         return snapshot_commit, _extract
@@ -1552,7 +1513,8 @@ async def _enrich_one_repo(
             # Use per-commit inferred source roots for both outgoing candidate
             # filtering and incoming dep import-link validation.
             snapshot_source_roots = commit_to_source_roots.get(
-                snapshot_commit, config.IMPORT_SOURCE_ROOTS,
+                snapshot_commit,
+                config.IMPORT_SOURCE_ROOTS,
             )
             # Build a one-hop re-export map: sub-module path →
             # frozenset of __init__.py paths that import from it.
@@ -1620,9 +1582,7 @@ async def _enrich_one_repo(
                             config.OUTGOING_REEXPORT_MAX_DEPTH,
                         )
                         if resolved:
-                            if fact.imported_name is not None and any(
-                                not p.endswith("/__init__.py") for p in resolved
-                            ):
+                            if fact.imported_name is not None and any(not p.endswith("/__init__.py") for p in resolved):
                                 outgoing_reexport_resolved += 1
                             candidate_set |= set(resolved)
                         else:
@@ -1633,8 +1593,7 @@ async def _enrich_one_repo(
                             fact_fallback: set[str] = {
                                 candidate_norm
                                 for candidate_norm in (
-                                    path_utils.normalize_repo_rel_path(candidate)
-                                    for candidate in fact.candidate_paths
+                                    path_utils.normalize_repo_rel_path(candidate) for candidate in fact.candidate_paths
                                 )
                                 if (
                                     candidate_norm is not None
@@ -1657,12 +1616,12 @@ async def _enrich_one_repo(
                 if candidate_paths:
                     outgoing: dict[str, str] = {}
                     for candidate in candidate_paths:
-                        # Priority 1: annotated patched content (dep changed in same snapshot)
+                        # Priority 1: clean HEAD text (dep changed in same snapshot)
                         dep_entry = path_map.get(candidate)
                         if dep_entry is not None:
-                            patched = dep_entry.get("patched_content")
-                            if patched is not None:
-                                outgoing[candidate] = patched
+                            dep_head_text = dep_entry.get("_head_text")
+                            if isinstance(dep_head_text, str):
+                                outgoing[candidate] = dep_head_text
                                 continue
                         # Priority 2: raw HEAD content from snapshot zipball
                         dep_content = await _get_raw_dep_content(candidate)
@@ -1680,7 +1639,8 @@ async def _enrich_one_repo(
                     # candidate truly imports the changed module, not just
                     # mentions the same symbol name by coincidence.
                     target_variants = _incoming_import_target_variants(
-                        path, snapshot_source_roots,
+                        path,
+                        snapshot_source_roots,
                     )
                     # One-hop re-export expansion: if any __init__.py in the
                     # changed file's package hierarchy re-exports from this
@@ -1694,9 +1654,7 @@ async def _enrich_one_repo(
                     # Symbol regex is a cheap prefilter executed before the
                     # heavier AST import parse on each candidate.
                     file_pattern = re.compile(
-                        r"\b(?:"
-                        + "|".join(re.escape(s) for s in sorted(changed_symbols))
-                        + r")\b",
+                        r"\b(?:" + "|".join(re.escape(s) for s in sorted(changed_symbols)) + r")\b",
                     )
                     incoming: dict[str, str] = {}
                     for dep_path, dep_content in usage_map.items():
@@ -1709,7 +1667,9 @@ async def _enrich_one_repo(
                         # changed module (or one of its package-init equivalents
                         # under any recognised source root).
                         dep_imports, _ = import_resolution.resolve_import_candidates(
-                            dep_content, dep_path, snapshot_source_roots,
+                            dep_content,
+                            dep_path,
+                            snapshot_source_roots,
                         )
                         if dep_imports & target_variants:
                             # Prefer annotated patched content when incoming dep was
@@ -1718,9 +1678,9 @@ async def _enrich_one_repo(
                             # AST parser is not confused by +/- line prefixes.
                             dep_patched_entry = path_map.get(dep_path)
                             if dep_patched_entry is not None:
-                                dep_patched = dep_patched_entry.get("patched_content")
-                                if dep_patched is not None:
-                                    incoming[dep_path] = dep_patched
+                                dep_head_text = dep_patched_entry.get("_head_text")
+                                if isinstance(dep_head_text, str):
+                                    incoming[dep_path] = dep_head_text
                                     continue
                             incoming[dep_path] = dep_content
                     if incoming:
@@ -1756,7 +1716,6 @@ async def _enrich_one_repo(
     for pr_number in list(dataset[repo_name].keys()):
         pr_entry = dataset[repo_name][pr_number]
         base_commit = pr_entry.get("base_commit")
-        base_meta = base_metadata_caches.get(base_commit, {}) if base_commit else {}
         for snapshot_commit, path_map in pr_entry["commits"].items():
             head_meta = snapshot_metadata_head.get(snapshot_commit, {})
             if not head_meta:
@@ -1764,12 +1723,7 @@ async def _enrich_one_repo(
             cmap = compare_cache.get((pr_number, snapshot_commit), {})
             result: dict[str, str] = {}
             for meta_path, head_text in head_meta.items():
-                cinfo = cmap.get(meta_path)
-                if cinfo and cinfo.get("patch"):
-                    base_text = base_meta.get(meta_path, "")
-                    result[meta_path] = patches.full_file_annotated_diff(base_text, head_text)
-                else:
-                    result[meta_path] = head_text
+                result[meta_path] = head_text
             if result:
                 path_map["metadata_files"] = result
 
