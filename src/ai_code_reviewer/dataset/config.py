@@ -73,6 +73,7 @@ SEED: int = 42
 # Metadata files to search for (matched by basename) anywhere in the repo tree.
 METADATA_FILE_NAMES: list[str] = [
     "README.md",
+    "CONTRIBUTING.md",
     "requirements.txt",
     "setup.py",
     "setup.cfg",

@@ -99,7 +99,46 @@ To evaluate the relevance of generated comments against human reviews:
 
 ## 3. Dataset
 
-> **TODO:** https://github.com/lolyhop/ai-code-reviewer/issues/2
+### 3.1 Language Popularity
+For the initial MVP we will focus entirely on Python scripts (`.py` files) for simplicity and focus on the core functionality.
+
+According to [Stack Overflow Developer Survey 2025](https://survey.stackoverflow.co/2025/technology#most-popular-technologies-language-language), Python is the second most popular language across professional developers, and first among people who are learning to code, which shows it's potential to become a dominant language in the future. Moreover, ratings like [TIOBE](https://www.tiobe.com/tiobe-index/) and [PYPL](https://pypl.github.io/PYPL.html) puts python on the top of the most popular languages list, gaining popularity year over year.
+
+Another factor towards focusing on Python is the fact that Python is the default choice by majority of LLMs itself (largely due to the language's popularity and ease of use) according to [Twist et al. (2026)](https://arxiv.org/pdf/2503.17181v3). This could simplify and speed up the modeling process for the initial MVP, while doesn't strictly make the architecture incompatible with other languages (just a bit more nuanced tuning required).
+
+Given the above, we will focus on Python scripts (`.py` files, but excluding Jupyter Notebooks due to parsing complexity) for the initial MVP.
+
+### 3.2 GH Archive Data
+As the main source of PR comments data we will use [GH Archive](https://www.gharchive.org/). This dataset records every public event on GitHub, including Pull Request review comments. 
+
+From this source we will extract:
+- 
+- 
+
+To the best of our knowledge, there is no rate limiting on this dataset, we we could efficiently parallelize the data collection process.
+
+### 3.3 GitHub API Data
+Though GH Archive provides information about PR review comments, it lacks context around the PR and changed files themselves. For this we will utilize GitHub API to fetch additional information. More specifically, we will utilize two types of API: (1) REST API to fetch PR and changed files content, (2) GraphQL API to fetch PR metadata.
+
+From GitHub REST API we will fetch:
+-
+-
+
+From GitHub GraphQL API we will fetch:
+-
+-
+-
+
+
+### 3.4 Dependencies Resolution
+
+#### 3.4.1 Incoming Dependencies
+
+
+#### 3.4.2 Outgoing Dependencies
+
+### 3.5 Data Preparation
+
 
 ## 4. Solution
 
