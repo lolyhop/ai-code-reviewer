@@ -13,8 +13,8 @@ class ModelConfig:
 
 @dataclass
 class GenerationConfig:
-    max_new_tokens: int = 256
-    temperature: float = 0.0
+    max_new_tokens: int = 512
+    temperature: float = 0.3
     top_p: float = 1.0
     do_sample: bool = False
     repetition_penalty: float = 1.0
