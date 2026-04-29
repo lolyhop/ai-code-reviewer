@@ -22,6 +22,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+finetune = [
+    "accelerate>=0.27.0",
+    "datasets>=2.16.0",
+    "numpy>=1.24.0",
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+]
 dev = [
     "mypy>=1.19.0",
     "nbdime>=4.0.0",
@@ -37,7 +44,7 @@ ai_code_reviewer = ["py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["ai_code_reviewer*"]
+include = ["ai_code_reviewer*", "evaluation*"]
 
 [tool.mypy]
 python_version = "3.11"

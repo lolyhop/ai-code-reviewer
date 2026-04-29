@@ -5,25 +5,35 @@ Automated Pull Request Reviewer is a LLM-based system for reviewing Python pull 
 Our solution processes pull requests file by file, augments each changed file with repository-specific context, and uses a language model to identify correctness, safety, and maintainability issues that may be missed by standard static analysis tools.
 
 
+## Key Documents
+
+| Document | Description |
+|---|---|
+| [`docs/design/design_doc.md`](docs/design/design_doc.md) | ML System Design: end-to-end pipeline, context construction, data labeling methodology, and evaluation strategy |
+| [`docs/design/architecture.md`](docs/design/architecture.md) | Solution architecture: system overview, methodology, data pipeline, and limitations |
+| [`docs/design/baseline_model.md`](docs/design/baseline_model.md) | Baseline model selection: hardware constraints, candidate comparison (LiveCodeBench), and rationale for choosing Qwen3-1.7B |
+| [`docs/reports/comment_quality_evaluation.md`](docs/reports/comment_quality_evaluation.md) | Evaluation methodology: BERTScore vs ROUGE-L vs LLM-as-Judge, CodeBERT backbone choice, and final LLM-Judge framework with bias mitigation |
+
 ## 📂 Project Structure
 
 ```text
 .
-├── data/                  # Raw, intermediate, and processed datasets
-├── docs/                  # Design documents, reports, and methodology
-├── notebooks/             # Research notebooks, experiments, and EDA
-├── src/                   # Source code for data collection, preprocessing, retrieval, and inference
-│   ├── data/              # Dataset construction and labeling pipeline
-│   ├── retrieval/         # Repository context extraction and candidate generation
-│   ├── models/            # Model wrappers, prompting, and fine-tuning code
-│   ├── evaluation/        # Offline evaluation and metrics
-│   └── app/               # Demo or interface code
-├── tests/                 # Unit and integration tests
-├── README.md              # Project overview
-└── requirements.txt       # Python dependencies
+├── data/                          # Raw, intermediate, and processed datasets
+├── docs/                          # Design documents, reports, and methodology
+│   ├── design/                    # Architecture, baseline model, design doc
+│   └── reports/                   # Evaluation methodology reports
+├── notebooks/                     # Research notebooks, experiments, and EDA
+├── src/
+│   ├── ai_code_reviewer/          # Main package
+│   │   ├── dataset/               # Dataset construction from GH Archive & GitHub API
+│   │   ├── data_processing/       # Data cleaning & LLM-based labeling pipeline
+│   │   ├── models/                # Inference, prompting, retrieval, and pipeline
+│   │   └── finetuning/            # Supervised fine-tuning (qwen3-specific)
+│   └── evaluation/                # Offline evaluation metrics (BERTScore, IoU, F1)
+├── pyproject.toml                 # Build config and dependencies
+├── README.md                      # Project overview
+└── requirements.txt               # Evaluation dependencies
 ```
-
-> The exact structure may evolve during development as we finalize the pipeline and experiments.
 
 ## 👥 Team
 | Role   | Name                      | Email                                                                                 | Responsibilities |

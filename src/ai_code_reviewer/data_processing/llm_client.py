@@ -1,20 +1,14 @@
-import json
 import logging
 import os
 import time
 import typing as tp
-import requests
+
+import openai
 import urllib3
 
-# Disable warnings about unverified HTTPS requests globally
+from ai_code_reviewer.utils import parse_json_response
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# For requests: turn off certificate verification for ALL requests made via requests
-import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-
-requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-import openai
 
 logger = logging.getLogger(__name__)
 
@@ -89,26 +83,4 @@ class LLMClient:
     ) -> tp.Dict[str, tp.Any]:
         """Generate a response and parse it as JSON."""
         raw = self.generate(prompt, system_prompt, max_tokens, temperature)
-        return self._parse_json(raw)
-
-    @staticmethod
-    def _parse_json(raw: str) -> tp.Dict[str, tp.Any]:
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-        text = text.strip()
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > start:
-                try:
-                    return json.loads(text[start:end])
-                except json.JSONDecodeError:
-                    pass
-            logger.warning("Failed to parse JSON from LLM response: %s", text[:200])
-        return {}
+        return parse_json_response(raw)

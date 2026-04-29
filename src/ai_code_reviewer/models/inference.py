@@ -1,12 +1,12 @@
-import json
 import logging
 import typing as tp
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.ai_code_reviewer.models.config import GenerationConfig, ModelConfig
-from src.ai_code_reviewer.models.schema import PredictedIssue, ReviewPrediction
+from ai_code_reviewer.models.config import GenerationConfig, ModelConfig
+from ai_code_reviewer.models.schema import PredictedIssue, ReviewPrediction
+from ai_code_reviewer.utils import parse_json_response
 
 logger = logging.getLogger(__name__)
 
@@ -133,29 +133,9 @@ class ReviewModel:
     @staticmethod
     def _parse_response(raw: str) -> ReviewPrediction:
         """Best-effort JSON parse of model output."""
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-        text = text.strip()
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > start:
-                try:
-                    data = json.loads(text[start:end])
-                except json.JSONDecodeError:
-                    logger.warning(
-                        "Failed to parse model output as JSON: %s", text[:200]
-                    )
-                    return ReviewPrediction()
-            else:
-                logger.warning("No JSON object found in model output: %s", text[:200])
-                return ReviewPrediction()
+        data = parse_json_response(raw)
+        if not data:
+            return ReviewPrediction()
 
         issues = []
         for item in data.get("issues", []):

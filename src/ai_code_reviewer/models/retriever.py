@@ -1,7 +1,7 @@
 import os
 import typing as tp
 
-from src.ai_code_reviewer.models.schema import ReviewSample
+from ai_code_reviewer.models.schema import ReviewSample
 
 JUNK_BASENAMES = frozenset({"__init__.py", "setup.py", "conftest.py", "__version__.py"})
 
