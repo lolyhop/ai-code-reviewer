@@ -144,7 +144,9 @@ def _parse_cell(raw: Any) -> Any:
             try:
                 return ast.literal_eval(s)
             except (ValueError, SyntaxError):
-                logger.warning("Could not parse cell as JSON or literal: %s...", s[:120])
+                logger.warning(
+                    "Could not parse cell as JSON or literal: %s...", s[:120]
+                )
                 return {}
     return {}
 
@@ -190,9 +192,7 @@ def parse_issues_payload(payload: Any) -> List[IssueNorm]:
     return out
 
 
-def line_span_iou(
-    start1: int, end1: int, start2: int, end2: int
-) -> float:
+def line_span_iou(start1: int, end1: int, start2: int, end2: int) -> float:
     """IoU over inclusive integer line ranges [start, end]."""
     inter = max(0, min(end1, end2) - max(start1, start2) + 1)
     len1 = end1 - start1 + 1
@@ -255,7 +255,9 @@ def _safe_int_label(val: Any) -> int:
         return 0
 
 
-def binary_classification_metrics(y_true: List[int], y_pred: List[int]) -> Dict[str, Any]:
+def binary_classification_metrics(
+    y_true: List[int], y_pred: List[int]
+) -> Dict[str, Any]:
     """Accuracy, precision/recall/F1 for positive class (1 = blocking issue present)."""
     if len(y_true) != len(y_pred):
         raise ValueError("y_true and y_pred length mismatch")
@@ -430,9 +432,9 @@ def evaluate_predictions_dataframe(
         "n_rows": len(df),
         "binary": binary_classification_metrics(y_true, y_pred_bin),
         "line_range_iou": {
-            "mean_iou_over_rows": float(sum(iou_row_means) / len(iou_row_means))
-            if iou_row_means
-            else 0.0,
+            "mean_iou_over_rows": (
+                float(sum(iou_row_means) / len(iou_row_means)) if iou_row_means else 0.0
+            ),
             "description": "Mean greedy IoU between GT and predicted line ranges; "
             "averaged per row over GT issues, then over rows.",
         },
@@ -549,16 +551,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate review predictions CSV (target vs prediction vs label).",
     )
-    parser.add_argument("csv_path", help="Path to predictions CSV")
+    parser.add_argument(
+        "--csv_path",
+        type=str,
+        default="/root/outputs/predictions_fft.csv",
+        help="Path to predictions CSV",
+    )
     parser.add_argument(
         "-o",
         "--output-json",
-        default=None,
+        default="/root/outputs/metrics.json",
         help="Write metrics to this JSON file",
     )
     parser.add_argument(
         "--skip-bertscore",
         action="store_true",
+        default=True,
         help="Skip BERTScore (faster, no GPU/model download)",
     )
     args = parser.parse_args()
