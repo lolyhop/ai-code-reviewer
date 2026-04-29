@@ -554,13 +554,13 @@ def main() -> None:
     parser.add_argument(
         "--csv_path",
         type=str,
-        default="/root/outputs/predictions_fft.csv",
+        required=True,
         help="Path to predictions CSV",
     )
     parser.add_argument(
         "-o",
         "--output-json",
-        default="/root/outputs/metrics.json",
+        default=None,
         help="Write metrics to this JSON file",
     )
     parser.add_argument(

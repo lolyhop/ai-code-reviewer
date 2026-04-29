@@ -2,7 +2,7 @@ import os
 import re
 import typing as tp
 
-from src.ai_code_reviewer.models.schema import ReviewSample
+from ai_code_reviewer.models.schema import ReviewSample
 
 DEPENDENCY_BASENAMES = frozenset(
     {

@@ -9,21 +9,22 @@ Our solution processes pull requests file by file, augments each changed file wi
 
 ```text
 .
-├── data/                  # Raw, intermediate, and processed datasets
-├── docs/                  # Design documents, reports, and methodology
-├── notebooks/             # Research notebooks, experiments, and EDA
-├── src/                   # Source code for data collection, preprocessing, retrieval, and inference
-│   ├── data/              # Dataset construction and labeling pipeline
-│   ├── retrieval/         # Repository context extraction and candidate generation
-│   ├── models/            # Model wrappers, prompting, and fine-tuning code
-│   ├── evaluation/        # Offline evaluation and metrics
-│   └── app/               # Demo or interface code
-├── tests/                 # Unit and integration tests
-├── README.md              # Project overview
-└── requirements.txt       # Python dependencies
+├── data/                          # Raw, intermediate, and processed datasets
+├── docs/                          # Design documents, reports, and methodology
+│   ├── design/                    # Architecture, baseline model, design doc
+│   └── reports/                   # Evaluation methodology reports
+├── notebooks/                     # Research notebooks, experiments, and EDA
+├── src/
+│   ├── ai_code_reviewer/          # Main package
+│   │   ├── dataset/               # Dataset construction from GH Archive & GitHub API
+│   │   ├── data_processing/       # Data cleaning & LLM-based labeling pipeline
+│   │   ├── models/                # Inference, prompting, retrieval, and pipeline
+│   │   └── finetuning/            # Supervised fine-tuning (qwen3-specific)
+│   └── evaluation/                # Offline evaluation metrics (BERTScore, IoU, F1)
+├── pyproject.toml                 # Build config and dependencies
+├── README.md                      # Project overview
+└── requirements.txt               # Evaluation dependencies
 ```
-
-> The exact structure may evolve during development as we finalize the pipeline and experiments.
 
 ## 👥 Team
 | Role   | Name                      | Email                                                                                 | Responsibilities |

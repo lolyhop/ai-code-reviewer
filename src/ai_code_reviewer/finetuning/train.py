@@ -20,8 +20,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from src.ai_code_reviewer.finetuning.config import FinetuneConfig
-from src.ai_code_reviewer.finetuning.data import encode_sft_example, load_jsonl_rows
+from ai_code_reviewer.finetuning.config import FinetuneConfig
+from ai_code_reviewer.finetuning.data import encode_sft_example, load_jsonl_rows
 
 logger = logging.getLogger(__name__)
 

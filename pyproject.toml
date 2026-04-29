@@ -44,7 +44,7 @@ ai_code_reviewer = ["py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["ai_code_reviewer*"]
+include = ["ai_code_reviewer*", "evaluation*"]
 
 [tool.mypy]
 python_version = "3.11"

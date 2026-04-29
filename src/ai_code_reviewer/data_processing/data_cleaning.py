@@ -7,18 +7,18 @@ import typing as tp
 import pandas as pd
 from tqdm import tqdm
 
-from src.ai_code_reviewer.data_processing.llm_client import LLMClient
-from src.ai_code_reviewer.data_processing.prompts import (
+from ai_code_reviewer.data_processing.llm_client import LLMClient
+from ai_code_reviewer.data_processing.prompts import (
     COMMENT_CLASSIFICATION_PROMPT,
     NO_COMMENT_VALIDATION_PROMPT,
     VALID_CATEGORIES,
 )
-from src.ai_code_reviewer.models.metadata import (
+from ai_code_reviewer.models.metadata import (
     build_pull_request_metadata,
     build_repository_metadata,
 )
-from src.ai_code_reviewer.models.retriever import Retriever
-from src.ai_code_reviewer.models.schema import ReviewSample
+from ai_code_reviewer.models.retriever import Retriever
+from ai_code_reviewer.models.schema import ReviewSample
 
 logger = logging.getLogger(__name__)
 

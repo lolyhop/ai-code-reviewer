@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 from transformers import PreTrainedTokenizerBase
 
+from ai_code_reviewer.utils import load_jsonl
+
 logger = logging.getLogger(__name__)
+
+load_jsonl_rows = load_jsonl
 
 
 def _target_to_str(raw: Any) -> str:
@@ -18,27 +22,6 @@ def _target_to_str(raw: Any) -> str:
     if isinstance(raw, str):
         return raw
     return json.dumps(raw, ensure_ascii=False)
-
-
-def load_jsonl_rows(path: Path) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    logger.info("Loaded %d rows from %s", len(rows), path)
-    return rows
-
-
-def iter_jsonl_rows(path: Path) -> Iterator[Dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            yield json.loads(line)
 
 
 def _build_chat_strings(

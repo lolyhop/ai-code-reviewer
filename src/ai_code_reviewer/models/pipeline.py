@@ -1,20 +1,22 @@
 import json
-import pandas as pd
 import typing as tp
 
-from src.ai_code_reviewer.data_processing.data_cleaning import (
+import pandas as pd
+
+from ai_code_reviewer.data_processing.data_cleaning import (
     truncate_file_tree,
     preprocess_patched,
     _format_patched_content,
     _format_dependencies,
 )
-from src.ai_code_reviewer.models.metadata import (
+from ai_code_reviewer.models.metadata import (
     build_pull_request_metadata,
     build_repository_metadata,
 )
-from src.ai_code_reviewer.models.prompts import REVIEWER_PROMPT_TEMPLATE
-from src.ai_code_reviewer.models.retriever import Retriever
-from src.ai_code_reviewer.models.schema import ReviewPrediction, ReviewSample
+from ai_code_reviewer.models.prompts import REVIEWER_PROMPT_TEMPLATE
+from ai_code_reviewer.models.retriever import Retriever
+from ai_code_reviewer.models.schema import ReviewPrediction, ReviewSample
+from ai_code_reviewer.utils import load_jsonl
 
 
 class DatasetRowError(ValueError):
@@ -137,17 +139,6 @@ class ReviewPipeline:
         return ReviewSample.from_dict(payload)
 
 
-def _load_jsonl(path: str) -> tp.List[tp.Dict[str, tp.Any]]:
-    rows: tp.List[tp.Dict[str, tp.Any]] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return rows
-
-
 if __name__ == "__main__":
     import argparse
     import os
@@ -175,7 +166,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.jsonl:
-        raw_data = _load_jsonl(args.jsonl)
+        raw_data = load_jsonl(args.jsonl)
     else:
         dataset_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "..", "raw_dataset.json"
@@ -195,7 +186,7 @@ if __name__ == "__main__":
     print(f"Total samples: {len(samples)}\n")
 
     if args.infer:
-        from src.ai_code_reviewer.models.inference import ReviewModel
+        from ai_code_reviewer.models.inference import ReviewModel
 
         model = ReviewModel()
         model.load()
