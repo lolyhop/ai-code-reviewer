@@ -5,6 +5,15 @@ Automated Pull Request Reviewer is a LLM-based system for reviewing Python pull 
 Our solution processes pull requests file by file, augments each changed file with repository-specific context, and uses a language model to identify correctness, safety, and maintainability issues that may be missed by standard static analysis tools.
 
 
+## Key Documents
+
+| Document | Description |
+|---|---|
+| [`docs/design/design_doc.md`](docs/design/design_doc.md) | ML System Design: end-to-end pipeline, context construction, data labeling methodology, and evaluation strategy |
+| [`docs/design/architecture.md`](docs/design/architecture.md) | Solution architecture: system overview, methodology, data pipeline, and limitations |
+| [`docs/design/baseline_model.md`](docs/design/baseline_model.md) | Baseline model selection: hardware constraints, candidate comparison (LiveCodeBench), and rationale for choosing Qwen3-1.7B |
+| [`docs/reports/comment_quality_evaluation.md`](docs/reports/comment_quality_evaluation.md) | Evaluation methodology: BERTScore vs ROUGE-L vs LLM-as-Judge, CodeBERT backbone choice, and final LLM-Judge framework with bias mitigation |
+
 ## 📂 Project Structure
 
 ```text
