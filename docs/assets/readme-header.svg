@@ -1,0 +1,87 @@
+<svg width="1200" height="320" viewBox="0 0 1200 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Automated Pull Request Reviewer</title>
+  <desc id="desc">A neutral technical banner showing pull request context, model review, and inline comments.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#EEF4F8"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#334155" flood-opacity="0.10"/>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" stroke="#D8E0E7" stroke-width="1" opacity="0.45"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="320" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="320" rx="28" fill="url(#grid)"/>
+
+  <g opacity="0.72">
+    <circle cx="1030" cy="48" r="92" fill="#DBEAFE"/>
+    <circle cx="1110" cy="245" r="70" fill="#E0F2FE"/>
+    <circle cx="130" cy="270" r="78" fill="#E2E8F0"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="78" y="70" width="315" height="178" rx="18" fill="url(#panel)" stroke="#CBD5E1"/>
+    <rect x="78" y="70" width="315" height="42" rx="18" fill="#F1F5F9"/>
+    <rect x="78" y="100" width="315" height="12" fill="#F1F5F9"/>
+    <circle cx="106" cy="91" r="5" fill="#94A3B8"/>
+    <circle cx="126" cy="91" r="5" fill="#CBD5E1"/>
+    <circle cx="146" cy="91" r="5" fill="#CBD5E1"/>
+    <text x="176" y="96" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">pull request context</text>
+
+    <rect x="110" y="135" width="120" height="9" rx="4.5" fill="#94A3B8" opacity="0.65"/>
+    <rect x="110" y="160" width="220" height="9" rx="4.5" fill="#CBD5E1"/>
+    <rect x="110" y="185" width="178" height="9" rx="4.5" fill="#CBD5E1"/>
+    <rect x="110" y="210" width="236" height="9" rx="4.5" fill="#CBD5E1"/>
+    <rect x="110" y="235" width="144" height="9" rx="4.5" fill="#CBD5E1"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="443" y="48" width="314" height="224" rx="18" fill="#0F172A" stroke="#1E293B"/>
+    <rect x="443" y="48" width="314" height="44" rx="18" fill="#111827"/>
+    <rect x="443" y="80" width="314" height="12" fill="#111827"/>
+    <circle cx="471" cy="70" r="5" fill="#64748B"/>
+    <circle cx="491" cy="70" r="5" fill="#475569"/>
+    <circle cx="511" cy="70" r="5" fill="#475569"/>
+    <text x="541" y="75" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">changed file</text>
+
+    <text x="474" y="126" fill="#64748B" font-family="SFMono-Regular, Consolas, monospace" font-size="13">42</text>
+    <text x="512" y="126" fill="#93C5FD" font-family="SFMono-Regular, Consolas, monospace" font-size="13">def apply_patch(...):</text>
+    <text x="474" y="154" fill="#64748B" font-family="SFMono-Regular, Consolas, monospace" font-size="13">43</text>
+    <text x="512" y="154" fill="#A7F3D0" font-family="SFMono-Regular, Consolas, monospace" font-size="13">+ validate_state(repo)</text>
+    <text x="474" y="182" fill="#64748B" font-family="SFMono-Regular, Consolas, monospace" font-size="13">44</text>
+    <text x="512" y="182" fill="#FCA5A5" font-family="SFMono-Regular, Consolas, monospace" font-size="13">- return raw_result</text>
+    <text x="474" y="210" fill="#64748B" font-family="SFMono-Regular, Consolas, monospace" font-size="13">45</text>
+    <text x="512" y="210" fill="#A7F3D0" font-family="SFMono-Regular, Consolas, monospace" font-size="13">+ return parsed_result</text>
+    <rect x="508" y="230" width="190" height="10" rx="5" fill="#334155"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="808" y="72" width="314" height="176" rx="18" fill="url(#panel)" stroke="#CBD5E1"/>
+    <rect x="838" y="106" width="118" height="26" rx="13" fill="#E0F2FE" stroke="#BAE6FD"/>
+    <text x="858" y="124" fill="#0369A1" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">review result</text>
+
+    <path d="M862 164H1066C1080.36 164 1092 175.641 1092 190V206C1092 220.359 1080.36 232 1066 232H900L868 256V232H862C847.641 232 836 220.359 836 206V190C836 175.641 847.641 164 862 164Z" fill="#FFFFFF" stroke="#CBD5E1"/>
+    <rect x="866" y="188" width="170" height="8" rx="4" fill="#94A3B8" opacity="0.75"/>
+    <rect x="866" y="208" width="128" height="8" rx="4" fill="#CBD5E1"/>
+    <rect x="1017" y="207" width="46" height="18" rx="9" fill="#DCFCE7"/>
+    <text x="1027" y="220" fill="#166534" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="700">line 45</text>
+  </g>
+
+  <g>
+    <path d="M398 160H438" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M431 153L438 160L431 167" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M762 160H802" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M795 153L802 160L795 167" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="600" y="292" text-anchor="middle" fill="#334155" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">Automated Pull Request Reviewer</text>
+  <text x="600" y="313" text-anchor="middle" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="13">reconstruct context, review changed lines, return structured comments</text>
+</svg>
