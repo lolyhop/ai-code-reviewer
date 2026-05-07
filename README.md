@@ -1,5 +1,3 @@
-<h1 align="center">Automated Pull Request Reviewer</h1>
-
 <p align="center">
   <img src="docs/assets/readme-header.png" alt="Automated Pull Request Reviewer overview" width="100%">
 </p>
