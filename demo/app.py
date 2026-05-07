@@ -1,24 +1,8 @@
-"""Streamlit entrypoint for the Automated Pull Request Reviewer demo.
+"""Streamlit demo: ``streamlit run demo/app.py``.
 
-Run with::
-
-    streamlit run demo/app.py
-
-Flow:
-
-1. On startup, eagerly load the local Qwen3 reviewer model
-   (cached via :func:`streamlit.cache_resource`, so it runs once per session).
-2. Render the PR URL input only after the model is ready.
-3. On "Analyze PR":
-   * Parse the GitHub PR URL.
-   * Fetch PR metadata and changed files via the GitHub REST API.
-   * Reuse :class:`ai_code_reviewer.models.pipeline.ReviewPipeline` to build
-     the model context (same prompt template used by the rest of the project).
-   * Run inference with the already-loaded :class:`ReviewModel`.
-   * Render the structured review output in a GitHub-like UI.
-
-This entrypoint contains no mock fallback path; every analysis call uses
-the real local model.
+Loads the reviewer backend once (`streamlit.cache_resource`), then accepts a
+GitHub PR URL, fetches data, runs :class:`~ai_code_reviewer.models.pipeline.ReviewPipeline`,
+runs inference (transformers / ollama / openai per env), renders results.
 """
 
 from __future__ import annotations
@@ -93,18 +77,18 @@ def _select_initial_file(files: tp.Sequence[tp.Mapping[str, tp.Any]]) -> int:
 
 
 def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
-    """Load the local reviewer model eagerly.
-
-    Returns the ``model_info`` dict on success, or ``None`` on failure
-    (in which case an error has already been rendered to the UI).
-    """
+    """Warm backend; ``None`` if UI already showed an error."""
     cached_info = st.session_state.get("model_info")
     if cached_info and cached_info.get("loaded"):
         return cached_info
 
-    backend = os.environ.get("APR_BACKEND", "transformers").strip().lower() or "transformers"
+    backend = (
+        os.environ.get("APR_BACKEND", "transformers").strip().lower() or "transformers"
+    )
     if backend == "ollama":
         spinner_text = "Connecting to local Ollama server and warming up the model ..."
+    elif backend == "openai":
+        spinner_text = "Connecting to OpenAI-compatible API ..."
     else:
         spinner_text = "Loading local reviewer model (first run downloads weights) ..."
 
@@ -123,12 +107,17 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
                     "```\n\n"
                     "Then reload this page.",
                 )
+            elif backend == "openai":
+                st.info(
+                    "```\n"
+                    "export OPENAI_API_KEY=...\n"
+                    "export OPENAI_BASE_URL=https://api.openai.com/v1\n"
+                    "export APR_BACKEND=openai\n"
+                    "```",
+                )
             else:
                 st.info(
-                    "Install the inference dependencies and reload the page:\n\n"
-                    '`pip install -e ".[finetune,demo]"`\n\n'
-                    "Or switch to the faster Ollama backend on Apple Silicon: "
-                    "`APR_BACKEND=ollama`.",
+                    '`pip install -e ".[finetune,demo]"` or `APR_BACKEND=ollama`.',
                 )
             return None
         except Exception as exc:  # noqa: BLE001
@@ -195,7 +184,7 @@ def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
 def main() -> None:
     st.set_page_config(
         page_title="APR — Automated Pull Request Reviewer",
-        page_icon="\U0001F50D",  # magnifying glass
+        page_icon="\U0001f50d",  # magnifying glass
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -206,11 +195,9 @@ def main() -> None:
 
     model_info = _ensure_model_ready()
     if model_info is None:
-        view.render_privacy_banner()
         return
 
     view.render_model_banner(model_info)
-    view.render_privacy_banner()
 
     if not os.environ.get("GITHUB_TOKEN"):
         st.warning(
@@ -250,7 +237,9 @@ def main() -> None:
             result = _run_analysis(target_url)
         if result is not None:
             st.session_state["result"] = result
-            st.session_state["selected_file_idx"] = _select_initial_file(result["files"])
+            st.session_state["selected_file_idx"] = _select_initial_file(
+                result["files"]
+            )
 
     result = st.session_state.get("result")
     if not result:

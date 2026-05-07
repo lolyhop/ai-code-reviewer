@@ -1,11 +1,4 @@
-"""Fallback mock data for the demo.
-
-Used **only** when the user explicitly enables the "Use mock data" toggle in
-the UI, or when live GitHub access fails and the user opts into mock mode.
-
-The default UI path is real PR analysis (see ``demo.adapters``); mock data
-exists for offline rehearsals, screen recordings, and unit-style smoke tests.
-"""
+"""Unused mock PR fixture (legacy). Live path is ``demo.adapters``."""
 
 from __future__ import annotations
 

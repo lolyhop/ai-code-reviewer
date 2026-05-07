@@ -1,22 +1,7 @@
-"""Thin integration layer between the Streamlit UI and the project pipeline.
+"""GitHub fetch + :class:`ReviewPipeline` + inference backends for the Streamlit demo.
 
-Responsibilities (kept deliberately compact):
-
-* Parse a GitHub PR URL.
-* Fetch PR metadata, changed file list, and base file content via the GitHub
-  REST API (synchronous ``urllib`` to play well with Streamlit).
-* Reuse :func:`ai_code_reviewer.dataset.patches.compute_patched_content` to
-  produce the same annotated full-file ``patched_content`` that the existing
-  ``ReviewPipeline`` expects.
-* Build :class:`ai_code_reviewer.models.schema.ReviewSample` rows and feed
-  them into the existing :class:`ReviewPipeline` for prompt construction.
-* Run inference with :class:`ai_code_reviewer.models.inference.ReviewModel`
-  (the project's local Qwen3 baseline; configurable via env vars).
-* Convert :class:`ReviewPrediction` into a UI-friendly structured dict.
-
-This file does **not** rebuild the project's prompt logic — it only adapts
-shapes and fetches live data. Whenever an equivalent module exists under
-``src/ai_code_reviewer``, it is reused directly.
+Uses sync ``urllib`` (Streamlit-friendly). Reuses project modules under
+``ai_code_reviewer`` where possible.
 """
 
 from __future__ import annotations
@@ -52,14 +37,7 @@ from ai_code_reviewer.utils import parse_json_response  # noqa: E402
 
 
 def _import_review_pipeline() -> tp.Any:
-    """Lazy-import ``ReviewPipeline``.
-
-    Done lazily because the import chain
-    (``models.pipeline`` -> ``data_processing.data_cleaning`` ->
-    ``data_processing.llm_client`` -> ``openai``) pulls in ``openai``, which
-    is not in the project's base dependencies. Mock mode must keep working
-    without it.
-    """
+    """Lazy-import ``ReviewPipeline`` (optional ``openai`` in import chain)."""
     from ai_code_reviewer.models.pipeline import ReviewPipeline  # noqa: WPS433
 
     return ReviewPipeline
@@ -153,13 +131,7 @@ class GitHubError(RuntimeError):
 
 
 class GitHubPRFetcher:
-    """Minimal synchronous GitHub client used by the demo only.
-
-    The full project pipeline uses an async ``aiohttp``-based fetcher in
-    ``ai_code_reviewer.dataset.github_api``. That implementation is designed
-    for batch corpus enrichment and is too heavy to drive from a Streamlit
-    callback, so the demo uses a small ``urllib`` adapter instead.
-    """
+    """Sync GitHub REST client (``urllib``); core pipeline uses aiohttp."""
 
     def __init__(self, token: tp.Optional[str] = None, timeout: float = 20.0) -> None:
         self.token = token or os.environ.get("GITHUB_TOKEN")
@@ -262,13 +234,7 @@ def _is_python_path(path: str) -> bool:
 
 
 def _build_source_lines(annotated: str) -> tp.List[tp.Tuple[int, str]]:
-    """Convert annotated full-file content into ``(lineno, prefix+text)`` tuples.
-
-    Line numbers are 1-based positions inside the annotated string. They match
-    the coordinate space used by ``_format_patched_content`` in the project
-    pipeline, which is what the model sees in the prompt and what its returned
-    line ranges refer to.
-    """
+    """Annotated patch lines → ``(1-based lineno, display text)``."""
     out: tp.List[tp.Tuple[int, str]] = []
     for idx, raw in enumerate(annotated.splitlines(), start=1):
         if not raw:
@@ -307,10 +273,7 @@ def build_review_sample(
     base_content: tp.Optional[str],
     repo_star_count: int,
 ) -> tp.Tuple[tp.Dict[str, tp.Any], str, tp.List[tp.Tuple[int, str]]]:
-    """Return ``(payload, annotated_text, source_lines)`` for one changed file.
-
-    ``payload`` matches the dict shape consumed by ``ReviewSample.from_dict``.
-    """
+    """One file: ``ReviewSample`` dict, annotated text, UI diff lines."""
     path = file_entry["filename"]
     patch = file_entry.get("patch") or ""
     file_status = (file_entry.get("status") or "").lower()
@@ -333,8 +296,6 @@ def build_review_sample(
         "commit_sha": (pr.get("head") or {}).get("sha") or "",
         "path": path,
         "patched_content": annotated,
-        # The demo skips heavy dependency resolution — leave them empty.
-        # ReviewPipeline handles empty dicts and prints "None" in the prompt.
         "outgoing_dependencies": {},
         "incoming_dependencies": {},
         "metadata_files": {},
@@ -420,11 +381,7 @@ def _gen_config_from_env() -> GenerationConfig:
 
 
 def _parse_review_response(raw: str) -> ReviewPrediction:
-    """Parse model output (raw string) into a :class:`ReviewPrediction`.
-
-    Mirrors :meth:`ReviewModel._parse_response` but lives here so the Ollama
-    backend can use it without importing the torch-heavy ``ReviewModel``.
-    """
+    """JSON ``issues`` → ``ReviewPrediction`` (shared by non-torch backends)."""
     data = parse_json_response(raw)
     if not data:
         return ReviewPrediction()
@@ -445,12 +402,7 @@ def _parse_review_response(raw: str) -> ReviewPrediction:
 
 
 class _OllamaReviewModel:
-    """Minimal Ollama client that mimics the ``ReviewModel.predict`` interface.
-
-    Talks to Ollama's native HTTP API (``/api/chat`` with ``stream=False``).
-    Recommended on Apple Silicon where ``transformers`` + MPS is much slower
-    than llama.cpp via Metal (which Ollama uses under the hood).
-    """
+    """Ollama ``/api/chat``; same ``predict`` surface as ``ReviewModel``."""
 
     def __init__(
         self,
@@ -479,7 +431,7 @@ class _OllamaReviewModel:
             return json.loads(resp.read().decode("utf-8"))
 
     def health_check(self) -> tp.List[str]:
-        """Verify the Ollama server is up and the requested model is pulled."""
+        """Require ``/api/tags`` + model tag."""
         try:
             data = self._http_get_json("/api/tags", timeout=10.0)
         except urllib.error.URLError as exc:
@@ -501,7 +453,7 @@ class _OllamaReviewModel:
         return models
 
     def warm_up(self) -> None:
-        """Trigger Ollama to load the model into memory (avoids cold-start)."""
+        """One-token request to load weights."""
         try:
             self._http_post_json(
                 "/api/chat",
@@ -531,8 +483,6 @@ class _OllamaReviewModel:
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            # Ollama supports forcing JSON-only output, which dramatically
-            # improves parse success on small models.
             "format": "json",
             "options": options,
         }
@@ -571,7 +521,141 @@ def _load_ollama_model() -> tp.Tuple[_OllamaReviewModel, tp.Dict[str, tp.Any]]:
     return model, info
 
 
+# --- OpenAI-compatible HTTP API (Chat Completions) -------------------------
+
+
+class _OpenAIReviewModel:
+    """``POST {base}/chat/completions``; response shape like OpenAI."""
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        *,
+        use_json_object: bool = True,
+        timeout: float = 120.0,
+    ) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.use_json_object = use_json_object
+        self.timeout = timeout
+
+    def health_check(self) -> None:
+        if not self.api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set.\n"
+                "Export your API key:\n"
+                "    export OPENAI_API_KEY=sk-...",
+            )
+
+    def warm_up(self) -> None:
+        return None
+
+    def _post_chat_completions(
+        self,
+        payload: tp.Dict[str, tp.Any],
+    ) -> tp.Dict[str, tp.Any]:
+        url = f"{self.base_url}/chat/completions"
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {self.api_key}")
+        req.add_header("User-Agent", USER_AGENT)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="replace")[:800]
+            raise RuntimeError(
+                f"OpenAI API HTTP {exc.code} for {url}\n{text}",
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"OpenAI API network error for {url}: {exc.reason}",
+            ) from exc
+
+    def generate_raw(
+        self,
+        prompt: str,
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> str:
+        cfg = gen_config or GenerationConfig()
+        payload: tp.Dict[str, tp.Any] = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": cfg.temperature if cfg.do_sample else 0.0,
+            "max_tokens": cfg.max_new_tokens,
+            "top_p": cfg.top_p,
+        }
+        if self.use_json_object:
+            payload["response_format"] = {"type": "json_object"}
+        response = self._post_chat_completions(payload)
+        choices = response.get("choices") or []
+        if not choices:
+            logger.warning("OpenAI API returned no choices: %s", response)
+            return ""
+        message = choices[0].get("message") or {}
+        return (message.get("content") or "").strip()
+
+    def predict(
+        self,
+        prompt: str,
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> ReviewPrediction:
+        return _parse_review_response(self.generate_raw(prompt, gen_config))
+
+    def predict_batch(
+        self,
+        prompts: tp.List[str],
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> tp.List[ReviewPrediction]:
+        return [self.predict(p, gen_config) for p in prompts]
+
+
+def _load_openai_model() -> tp.Tuple[_OpenAIReviewModel, tp.Dict[str, tp.Any]]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    model_name = os.environ.get("APR_OPENAI_MODEL", "gpt-4o-mini").strip()
+    json_obj = os.environ.get("APR_OPENAI_JSON_OBJECT", "1").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    model = _OpenAIReviewModel(
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+        use_json_object=json_obj,
+    )
+    model.health_check()
+    info: tp.Dict[str, tp.Any] = {
+        "backend": "openai",
+        "name": f"openai:{model_name}",
+        "device": "remote (OpenAI-compatible API)",
+        "endpoint": base_url,
+        "max_input_tokens": None,
+        "loaded": True,
+    }
+    return model, info
+
+
 # --- Transformers backend (existing path) -----------------------------------
+
+
+def _resolve_weights_path(model_name: str) -> str:
+    """Local dir, HF cache path, or hub id string."""
+    local = Path(model_name)
+    if local.is_dir():
+        return str(local.resolve())
+    try:
+        from huggingface_hub import snapshot_download  # noqa: WPS433
+
+        cache_dir = snapshot_download(model_name, local_files_only=True)
+        return str(cache_dir)
+    except Exception:  # noqa: BLE001
+        return model_name
 
 
 def _load_transformers_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
@@ -589,12 +673,14 @@ def _load_transformers_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
     cfg = _model_config_from_env()
     model = ReviewModel(model_config=cfg)
     model.load()
-    info = {
+    weights_path = _resolve_weights_path(cfg.model_name)
+    info: tp.Dict[str, tp.Any] = {
         "backend": "transformers",
         "name": cfg.model_name,
         "device": cfg.device_map,
         "torch_dtype": cfg.torch_dtype,
         "max_input_tokens": cfg.max_input_length,
+        "weights_path": weights_path,
         "loaded": True,
     }
     return model, info
@@ -604,33 +690,22 @@ def _load_transformers_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
 
 
 def _load_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
-    """Load the configured reviewer backend.
-
-    Backend is chosen via the ``APR_BACKEND`` env var:
-
-    * ``transformers`` (default) — local Qwen3 via HuggingFace transformers.
-      Requires the ``finetune`` extras (torch, transformers).
-    * ``ollama`` — local llama.cpp via Ollama. Recommended on Apple Silicon.
-      Requires Ollama running locally (``ollama serve``) and the chosen
-      model pulled (``ollama pull qwen2.5-coder:1.5b``).
-    """
+    """``APR_BACKEND``: ``transformers`` | ``ollama`` | ``openai``; ``openrouter`` → ``transformers``."""
     backend = os.environ.get("APR_BACKEND", "transformers").strip().lower()
     if backend == "ollama":
         return _load_ollama_model()
-    if backend in {"", "transformers", "hf", "huggingface"}:
+    if backend == "openai":
+        return _load_openai_model()
+    if backend in {"", "transformers", "hf", "huggingface", "openrouter"}:
         return _load_transformers_model()
     raise RuntimeError(
         f"Unknown APR_BACKEND={backend!r}. "
-        "Supported values: 'transformers' (default) or 'ollama'.",
+        "Supported values: 'transformers' (default), 'ollama', or 'openai'.",
     )
 
 
 def get_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
-    """Cached model loader.
-
-    Wrapped with Streamlit's ``cache_resource`` if streamlit is available,
-    otherwise behaves as a normal function.
-    """
+    """Load once per process via ``streamlit.cache_resource`` when possible."""
     try:
         import streamlit as st  # noqa: WPS433
 
@@ -659,7 +734,7 @@ def _build_context_summary(
     samples: tp.List[ReviewSample],
     pipeline_result: tp.Dict[str, tp.Any],
 ) -> tp.Dict[str, tp.Any]:
-    """Summarize the prompt context for the "Context used by model" panel."""
+    """Context panel at bottom of review view."""
     pr_title = ""
     pr_body = ""
     repo_summary = ""
@@ -702,11 +777,7 @@ def fetch_and_review_pr(
     status: StatusCallback = _noop_status,
     max_python_files: int = 6,
 ) -> PRReview:
-    """End-to-end real PR review: fetch, build context, run inference, parse.
-
-    All heavy lifting (prompt construction, retrieval, inference) is delegated
-    to the existing project modules. This function only wires them together.
-    """
+    """Fetch PR → pipeline → inference → UI structs."""
     parsed = parse_pr_url(pr_url)
     if not parsed:
         raise ValueError(

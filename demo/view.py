@@ -1,9 +1,4 @@
-"""UI rendering helpers for the demo.
-
-All Streamlit-specific HTML and CSS lives here. ``demo/app.py`` orchestrates
-control flow and calls these helpers; this module never touches the GitHub
-API or the model.
-"""
+"""Streamlit layout and CSS for the demo."""
 
 from __future__ import annotations
 
@@ -44,6 +39,18 @@ html, body, .stApp {
 .apr-badge-amber  { background: #fef3c7; color: #92400e; }
 .apr-badge-red    { background: #fee2e2; color: #991b1b; }
 .apr-badge-gray   { background: #f1f5f9; color: #475569; }
+
+.apr-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    align-items: center;
+}
+.apr-badge-row .apr-badge {
+    margin-right: 0;
+    margin-bottom: 0;
+}
 
 .apr-status-approved {
     display: inline-block; padding: 6px 16px; border-radius: 6px;
@@ -107,21 +114,11 @@ html, body, .stApp {
 }
 .apr-review-card .apr-rc-type   { font-weight: 700; color: #92400e; font-size: 0.85rem; }
 .apr-review-card .apr-rc-body   { color: #44403c; font-size: 0.85rem; line-height: 1.55; }
-.apr-review-card .apr-rc-meta   {
-    font-size: 0.75rem; color: #78716c; margin-top: 10px;
-    display: flex; flex-wrap: wrap; gap: 14px;
-}
 .apr-review-card .apr-rc-suggestion {
     background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;
     padding: 10px 12px; margin-top: 10px;
     font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem;
     color: #166534; white-space: pre-wrap;
-}
-
-.apr-privacy-banner {
-    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
-    padding: 12px 18px; font-size: 0.82rem; color: #1e40af;
-    display: flex; align-items: center; gap: 10px; margin-top: 8px;
 }
 
 .apr-model-info-banner {
@@ -142,12 +139,12 @@ def render_header() -> None:
     st.markdown("# Automated Pull Request Reviewer")
     st.markdown(
         '<span style="color:#64748b;font-size:1.05rem;">'
-        "Privacy-first local review agent for Python pull requests"
+        "Python PR review · demo UI"
         "</span>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div style="margin-top:6px;">'
+        '<div class="apr-badge-row">'
         '<span class="apr-badge apr-badge-blue">Python .py files only</span>'
         '<span class="apr-badge apr-badge-green">Local inference</span>'
         '<span class="apr-badge apr-badge-purple">Semantic issues</span>'
@@ -157,35 +154,33 @@ def render_header() -> None:
     )
 
 
-def render_privacy_banner() -> None:
-    st.markdown(
-        '<div class="apr-privacy-banner">'
-        "&#128274; &nbsp;<strong>Code is analyzed locally.</strong> "
-        "No proprietary source code is sent to external AI APIs."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
 def render_model_banner(model_info: tp.Mapping[str, tp.Any]) -> None:
-    name = model_info.get("name", "(unknown)")
-    device = model_info.get("device", "(unknown)")
-    backend = model_info.get("backend", "transformers")
+    """Model line in the header strip."""
+    name = html.escape(str(model_info.get("name", "(unknown)")))
+    weights_path = model_info.get("weights_path", "")
+    parts = [f"<strong>Model:</strong> <code>{name}</code>"]
+    if weights_path:
+        parts.append(
+            f"&middot; <strong>weights:</strong> "
+            f"<code>{html.escape(str(weights_path))}</code>",
+        )
+    else:
+        backend = model_info.get("backend", "")
+        ep = model_info.get("endpoint")
+        if backend == "ollama" and ep:
+            parts.append(
+                f"&middot; <strong>Ollama:</strong> "
+                f"<code>{html.escape(str(ep))}</code>",
+            )
+        elif backend == "openai" and ep:
+            parts.append(
+                f"&middot; <strong>API:</strong> "
+                f"<code>{html.escape(str(ep))}</code>",
+            )
     loaded = "loaded" if model_info.get("loaded") else "not loaded"
-    extras: tp.List[str] = []
-    if model_info.get("max_input_tokens"):
-        extras.append(f"context: {model_info['max_input_tokens']} tokens")
-    if model_info.get("endpoint"):
-        extras.append(f"endpoint: <code>{html.escape(str(model_info['endpoint']))}</code>")
-    extra_str = " &middot; " + " &middot; ".join(extras) if extras else ""
+    parts.append(f"&middot; <strong>status:</strong> {loaded}")
     st.markdown(
-        '<div class="apr-model-info-banner">'
-        f"<strong>Reviewer model:</strong> <code>{html.escape(str(name))}</code> "
-        f"&middot; backend: <code>{html.escape(str(backend))}</code> "
-        f"&middot; device: <code>{html.escape(str(device))}</code> "
-        f"&middot; status: {loaded}"
-        f"{extra_str}"
-        "</div>",
+        '<div class="apr-model-info-banner">' + " ".join(parts) + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -237,7 +232,9 @@ def render_summary_cards(
         )
     with c5:
         if review_status == "changes_requested":
-            badge = '<span class="apr-status-changes-requested">CHANGES REQUESTED</span>'
+            badge = (
+                '<span class="apr-status-changes-requested">CHANGES REQUESTED</span>'
+            )
         elif review_status == "approved":
             badge = '<span class="apr-status-approved">APPROVED BY BOT</span>'
         else:
@@ -334,13 +331,12 @@ def render_diff(file_data: tp.Mapping[str, tp.Any]) -> str:
         header_text = diff.split("\n", 1)[0]
     header_html = ""
     if header_text:
-        header_html = f'<span class="apr-diff-line-hdr">{html.escape(header_text)}</span>\n'
+        header_html = (
+            f'<span class="apr-diff-line-hdr">{html.escape(header_text)}</span>\n'
+        )
 
     return (
-        '<div class="apr-diff-block">'
-        + header_html
-        + "\n".join(lines_html)
-        + "</div>"
+        '<div class="apr-diff-block">' + header_html + "\n".join(lines_html) + "</div>"
     )
 
 
@@ -352,9 +348,6 @@ def render_review_comment(issue: tp.Mapping[str, tp.Any]) -> str:
             '<div class="apr-rc-suggestion"><strong>Suggested fix:</strong>\n'
             f"{html.escape(suggestion)}</div>"
         )
-    confidence = issue.get("confidence")
-    confidence_str = f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "n/a"
-
     return f"""
     <div class="apr-review-card">
         <div class="apr-rc-header">
@@ -363,15 +356,13 @@ def render_review_comment(issue: tp.Mapping[str, tp.Any]) -> str:
         </div>
         <div class="apr-rc-body">{html.escape(str(issue.get('comment', '')))}</div>
         {suggestion_html}
-        <div class="apr-rc-meta">
-            <span>Confidence: <strong>{confidence_str}</strong></span>
-            <span>Lines: <strong>{issue.get('line_start', '?')}&ndash;{issue.get('line_end', '?')}</strong></span>
-        </div>
     </div>
     """
 
 
-def render_comment_action_buttons(issue: tp.Mapping[str, tp.Any], file_idx: int) -> None:
+def render_comment_action_buttons(
+    issue: tp.Mapping[str, tp.Any], file_idx: int
+) -> None:
     line_start = issue.get("line_start", 0)
     bc1, bc2, bc3 = st.columns(3)
     with bc1:
@@ -399,11 +390,16 @@ def render_main_review_area(
 
     status = file_data.get("status", "")
     if status == "skipped":
-        msg = file_data.get("error") or "This file was skipped (non-Python or out of demo budget)."
+        msg = (
+            file_data.get("error")
+            or "This file was skipped (non-Python or out of demo budget)."
+        )
         st.info(msg)
         return
     if status == "error":
-        st.error(f"Could not analyze this file: {file_data.get('error') or 'unknown error'}")
+        st.error(
+            f"Could not analyze this file: {file_data.get('error') or 'unknown error'}"
+        )
         if file_data.get("source_lines"):
             st.markdown(render_diff(file_data), unsafe_allow_html=True)
         return
@@ -420,7 +416,7 @@ def render_main_review_area(
     if not issues:
         st.markdown(
             '<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
-            'border-radius:8px;padding:14px;color:#166534;font-size:0.85rem;'
+            "border-radius:8px;padding:14px;color:#166534;font-size:0.85rem;"
             'margin-top:10px;">'
             "&#10003; &nbsp;No blocking issues found in this file."
             "</div>",
@@ -470,7 +466,6 @@ __all__ = [
     "render_header",
     "render_main_review_area",
     "render_model_banner",
-    "render_privacy_banner",
     "render_review_comment",
     "render_summary_cards",
 ]
