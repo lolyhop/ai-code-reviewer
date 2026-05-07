@@ -19,6 +19,9 @@ dependencies = [
     "tqdm>=4.0",
     "whatthepatch>=1.0.0",
     "zstandard>=0.22.0",
+    "bert-score>=0.3.13",
+    "torch>=2.0.0"
+
 ]
 
 [project.optional-dependencies]
