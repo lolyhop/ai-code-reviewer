@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme-header.svg" alt="Automated Pull Request Reviewer overview" width="100%">
+  <img src="docs/assets/readme-header.png" alt="Automated Pull Request Reviewer overview" width="100%">
 </p>
 
 Automated Pull Request Reviewer (APR) is a local code-review pipeline for Python pull requests. It reconstructs changed files, adds repository context, asks a local language model to find blocking issues, and returns review comments with line ranges.
