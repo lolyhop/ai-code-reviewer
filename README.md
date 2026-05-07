@@ -1,7 +1,8 @@
 # Automated Pull Request Reviewer
 
-| [Final CRISP-DM report as PDF](TODO_FINAL_REPORT_PDF_URL) | [Presentation slides](TODO_PRESENTATION_SLIDES_URL) | [Video presentation](TODO_VIDEO_PRESENTATION_URL) | [Python notebook or code files](TODO_NOTEBOOK_OR_CODE_FILES_URL) | [Work distribution and roles table](TODO_WORK_DISTRIBUTION_ROLES_URL) |
-|---|---|---|---|---|
+<p align="center">
+| <a href="TODO_FINAL_REPORT_PDF_URL"><b>Final CRISP-DM Report</b></a> | <a href="TODO_PRESENTATION_SLIDES_URL"><b>Presentation Slides</b></a> | <a href="https://drive.google.com/file/d/1j87JaL00Pqbw8Ta7AHvyHwHbg9NWEOVi/view?usp=sharing"><b>Video Presentation</b></a> |
+</p>
 
 Automated Pull Request Reviewer (APR) is a local code-review pipeline for Python pull requests. It reconstructs changed files, adds repository context, asks a local language model to find blocking issues, and returns review comments with line ranges.
 
@@ -9,16 +10,14 @@ The project is built around one constraint: proprietary code should not be sent 
 
 ## Navigation
 
-- [Automated Pull Request Reviewer](#automated-pull-request-reviewer)
-  - [Navigation](#navigation)
-  - [How it works](#how-it-works)
-  - [Repository map](#repository-map)
-  - [Key files](#key-files)
-  - [Notebooks](#notebooks)
-  - [Documents and reports](#documents-and-reports)
-  - [Run the demo](#run-the-demo)
-  - [Common commands](#common-commands)
-  - [Scope](#scope)
+- [How it works](#how-it-works)
+- [Repository map](#repository-map)
+- [Key files](#key-files)
+- [Notebooks](#notebooks)
+- [Documents and reports](#documents-and-reports)
+- [Run the demo](#run-the-demo)
+- [Common commands](#common-commands)
+- [Scope](#scope)
 
 ## How it works
 
