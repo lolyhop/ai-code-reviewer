@@ -13,10 +13,6 @@ import typing as tp
 import streamlit as st
 
 
-# ---------------------------------------------------------------------------
-# CSS
-# ---------------------------------------------------------------------------
-
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -133,11 +129,6 @@ html, body, .stApp {
 """
 
 
-# ---------------------------------------------------------------------------
-# Header / banners
-# ---------------------------------------------------------------------------
-
-
 def render_header() -> None:
     st.markdown("# Automated Pull Request Reviewer")
     st.markdown(
@@ -188,11 +179,6 @@ def render_model_banner(model_info: tp.Mapping[str, tp.Any]) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
-
-
-# ---------------------------------------------------------------------------
-# Summary cards
-# ---------------------------------------------------------------------------
 
 
 def _card(label: str, value_html: str) -> str:
@@ -251,11 +237,6 @@ def render_summary_cards(
         )
 
 
-# ---------------------------------------------------------------------------
-# File sidebar
-# ---------------------------------------------------------------------------
-
-
 def render_file_sidebar(
     files: tp.Sequence[tp.Mapping[str, tp.Any]],
     selected_idx: int,
@@ -296,11 +277,6 @@ def render_file_sidebar(
             ):
                 st.session_state[state_key] = idx
                 st.rerun()
-
-
-# ---------------------------------------------------------------------------
-# Diff and review comment rendering
-# ---------------------------------------------------------------------------
 
 
 def render_diff(file_data: tp.Mapping[str, tp.Any]) -> str:
@@ -433,11 +409,6 @@ def render_main_review_area(
         render_comment_action_buttons(iss, file_idx)
 
 
-# ---------------------------------------------------------------------------
-# Context expanders
-# ---------------------------------------------------------------------------
-
-
 def render_context_section(context: tp.Mapping[str, tp.Any]) -> None:
     st.markdown("### Context used by model")
     with st.expander("PR title and description"):
@@ -454,11 +425,6 @@ def render_context_section(context: tp.Mapping[str, tp.Any]) -> None:
             st.code(site, language="text")
     with st.expander("Repository metadata summary"):
         st.code(context.get("repo_metadata", "Not available"), language="text")
-
-
-# ---------------------------------------------------------------------------
-# Public surface
-# ---------------------------------------------------------------------------
 
 
 __all__ = [

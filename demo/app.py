@@ -52,11 +52,6 @@ from demo.adapters import (  # noqa: E402
 DEMO_PR_PLACEHOLDER = "https://github.com/owner/repo/pull/123"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _result_from_pr_review(review: PRReview) -> tp.Dict[str, tp.Any]:
     return review.as_dict()
 
@@ -87,11 +82,6 @@ def _select_initial_file(files: tp.Sequence[tp.Mapping[str, tp.Any]]) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Model bootstrap
-# ---------------------------------------------------------------------------
-
-
 def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
     """Load the local reviewer model eagerly.
 
@@ -105,6 +95,8 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
     backend = os.environ.get("APR_BACKEND", "transformers").strip().lower() or "transformers"
     if backend == "ollama":
         spinner_text = "Connecting to local Ollama server and warming up the model ..."
+    elif backend in {"openai", "openai-compatible", "vllm"}:
+        spinner_text = "Connecting to the OpenAI-compatible model endpoint ..."
     else:
         spinner_text = "Loading local reviewer model (first run downloads weights) ..."
 
@@ -123,6 +115,17 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
                     "```\n\n"
                     "Then reload this page.",
                 )
+            elif backend in {"openai", "openai-compatible", "vllm"}:
+                st.info(
+                    "Check that the model server is reachable and exposes "
+                    "`/v1/chat/completions`.\n\n"
+                    "Example:\n\n"
+                    "```\n"
+                    "APR_BACKEND=openai\n"
+                    "APR_OPENAI_BASE_URL=http://localhost:8000/v1\n"
+                    "APR_OPENAI_MODEL=your-model-name\n"
+                    "```",
+                )
             else:
                 st.info(
                     "Install the inference dependencies and reload the page:\n\n"
@@ -137,11 +140,6 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
 
     st.session_state["model_info"] = info
     return info
-
-
-# ---------------------------------------------------------------------------
-# Analysis flow
-# ---------------------------------------------------------------------------
 
 
 def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
@@ -185,11 +183,6 @@ def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
         )
     st.success("Analysis complete.")
     return _result_from_pr_review(review)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:

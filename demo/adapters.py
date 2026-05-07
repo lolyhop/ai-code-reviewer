@@ -76,11 +76,6 @@ _GH_PR_RE = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class FileReview:
     path: str
@@ -126,11 +121,6 @@ class PRReview:
         }
 
 
-# ---------------------------------------------------------------------------
-# URL parsing
-# ---------------------------------------------------------------------------
-
-
 def parse_pr_url(url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
     """Parse ``https://github.com/{owner}/{repo}/pull/{number}`` into parts."""
     m = _GH_PR_RE.match((url or "").strip())
@@ -141,11 +131,6 @@ def parse_pr_url(url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
         "repo": m.group("repo"),
         "number": int(m.group("number")),
     }
-
-
-# ---------------------------------------------------------------------------
-# GitHub fetcher (synchronous, stdlib-only)
-# ---------------------------------------------------------------------------
 
 
 class GitHubError(RuntimeError):
@@ -249,11 +234,6 @@ class GitHubPRFetcher:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Sample construction (reuses project schema and patch logic)
-# ---------------------------------------------------------------------------
-
-
 _PY_EXT = ".py"
 
 
@@ -344,11 +324,6 @@ def build_review_sample(
     return payload, annotated, source_lines
 
 
-# ---------------------------------------------------------------------------
-# Output parsing
-# ---------------------------------------------------------------------------
-
-
 def _heuristic_issue_type(comment: str) -> str:
     text = (comment or "").lower()
     rules = [
@@ -386,11 +361,6 @@ def prediction_to_issues(prediction: ReviewPrediction) -> tp.List[tp.Dict[str, t
             },
         )
     return issues
-
-
-# ---------------------------------------------------------------------------
-# Local model loader: dispatches between transformers and Ollama backends
-# ---------------------------------------------------------------------------
 
 
 def _model_config_from_env() -> ModelConfig:
@@ -439,9 +409,6 @@ def _parse_review_response(raw: str) -> ReviewPrediction:
             ),
         )
     return ReviewPrediction(issues=issues)
-
-
-# --- Ollama backend ---------------------------------------------------------
 
 
 class _OllamaReviewModel:
@@ -571,7 +538,106 @@ def _load_ollama_model() -> tp.Tuple[_OllamaReviewModel, tp.Dict[str, tp.Any]]:
     return model, info
 
 
-# --- Transformers backend (existing path) -----------------------------------
+class _OpenAICompatibleReviewModel:
+    """Minimal client for OpenAI-compatible chat completion endpoints.
+
+    This covers local model servers such as vLLM, llama.cpp server, or any
+    internal gateway exposing ``/v1/chat/completions``.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        api_key: str = "",
+        timeout: float = 180.0,
+    ) -> None:
+        self.model_name = model_name
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def _http_post_json(self, path: str, payload: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
+        url = f"{self.base_url}{path}"
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", USER_AGENT)
+        if self.api_key:
+            req.add_header("Authorization", f"Bearer {self.api_key}")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(
+                f"OpenAI-compatible API HTTP {exc.code} at {url}\n{body_text}",
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"OpenAI-compatible API is not reachable at {self.base_url}: {exc.reason}",
+            ) from exc
+
+    def generate_raw(
+        self,
+        prompt: str,
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> str:
+        cfg = gen_config or GenerationConfig()
+        payload: tp.Dict[str, tp.Any] = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "max_tokens": cfg.max_new_tokens,
+            "temperature": cfg.temperature if cfg.do_sample else 0.0,
+            "top_p": cfg.top_p,
+        }
+        data = self._http_post_json("/chat/completions", payload)
+        choices = data.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        return message.get("content") or ""
+
+    def predict(
+        self,
+        prompt: str,
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> ReviewPrediction:
+        return _parse_review_response(self.generate_raw(prompt, gen_config))
+
+    def predict_batch(
+        self,
+        prompts: tp.List[str],
+        gen_config: tp.Optional[GenerationConfig] = None,
+    ) -> tp.List[ReviewPrediction]:
+        return [self.predict(p, gen_config) for p in prompts]
+
+
+def _load_openai_compatible_model() -> tp.Tuple[_OpenAICompatibleReviewModel, tp.Dict[str, tp.Any]]:
+    model_name = os.environ.get("APR_OPENAI_MODEL") or os.environ.get("APR_MODEL_NAME", "Qwen/Qwen3-1.7B")
+    base_url = os.environ.get("APR_OPENAI_BASE_URL", "http://localhost:8000/v1")
+    api_key = os.environ.get("APR_OPENAI_API_KEY", "")
+    try:
+        timeout = float(os.environ.get("APR_OPENAI_TIMEOUT", "180"))
+    except ValueError:
+        timeout = 180.0
+
+    model = _OpenAICompatibleReviewModel(
+        model_name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        timeout=timeout,
+    )
+    info = {
+        "backend": "openai-compatible",
+        "name": model_name,
+        "device": "external/local model server",
+        "endpoint": base_url,
+        "max_input_tokens": None,
+        "loaded": True,
+    }
+    return model, info
 
 
 def _load_transformers_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
@@ -600,9 +666,6 @@ def _load_transformers_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
     return model, info
 
 
-# --- Dispatcher -------------------------------------------------------------
-
-
 def _load_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
     """Load the configured reviewer backend.
 
@@ -610,6 +673,8 @@ def _load_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
 
     * ``transformers`` (default) — local Qwen3 via HuggingFace transformers.
       Requires the ``finetune`` extras (torch, transformers).
+    * ``openai`` / ``vllm`` — any OpenAI-compatible chat completion server
+      such as a local vLLM endpoint.
     * ``ollama`` — local llama.cpp via Ollama. Recommended on Apple Silicon.
       Requires Ollama running locally (``ollama serve``) and the chosen
       model pulled (``ollama pull qwen2.5-coder:1.5b``).
@@ -617,11 +682,13 @@ def _load_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
     backend = os.environ.get("APR_BACKEND", "transformers").strip().lower()
     if backend == "ollama":
         return _load_ollama_model()
+    if backend in {"openai", "openai-compatible", "vllm"}:
+        return _load_openai_compatible_model()
     if backend in {"", "transformers", "hf", "huggingface"}:
         return _load_transformers_model()
     raise RuntimeError(
         f"Unknown APR_BACKEND={backend!r}. "
-        "Supported values: 'transformers' (default) or 'ollama'.",
+        "Supported values: 'transformers' (default), 'openai', 'vllm', or 'ollama'.",
     )
 
 
@@ -641,11 +708,6 @@ def get_review_model() -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
         return _cached()
     except ImportError:
         return _load_review_model()
-
-
-# ---------------------------------------------------------------------------
-# High-level orchestration
-# ---------------------------------------------------------------------------
 
 
 StatusCallback = tp.Callable[[str, float], None]
@@ -900,11 +962,6 @@ def fetch_and_review_pr(
     )
 
 
-# ---------------------------------------------------------------------------
-# Public surface used by demo/app.py
-# ---------------------------------------------------------------------------
-
-
 __all__ = [
     "FileReview",
     "GitHubError",
@@ -918,7 +975,6 @@ __all__ = [
 ]
 
 
-# Re-exports for convenience in tests / notebooks.
 PredictedIssue = PredictedIssue  # noqa: PLW0127
 ReviewPrediction = ReviewPrediction  # noqa: PLW0127
 ReviewSample = ReviewSample  # noqa: PLW0127
