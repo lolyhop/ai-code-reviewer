@@ -12,13 +12,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SOURCE_ROOTS = config.IMPORT_SOURCE_ROOTS
 
-# Top-level names belonging to the standard library or the interpreter's
-# built-in modules.  Imports whose first dotted component appears here are
-# guaranteed not to resolve to files inside the repository, so we skip
-# candidate generation for them entirely.
-# `sys.stdlib_module_names` is available from Python 3.10 onward; we fall
-# back gracefully to an empty set so the filter is simply a no-op on older
-# interpreters.
 _STDLIB_TOP_LEVEL: frozenset[str] = frozenset(
     getattr(sys, "stdlib_module_names", frozenset()),
 ) | frozenset(sys.builtin_module_names)
@@ -111,7 +104,7 @@ def _relative_import_candidates(
     norm = file_path.replace("\\", "/").lstrip("/")
     dir_parts = norm.split("/")[:-1]
 
-    # level=1 → same package directory; level=2 → parent; ...
+    # level=1 is the current package; level=2 is the parent.
     steps_up = level - 1
     if steps_up > len(dir_parts):
         return None
@@ -160,28 +153,17 @@ def _candidates_for_node(
             candidates.extend(_module_parts_to_candidates(parts, source_roots))
         return candidates, False
 
-    # ast.ImportFrom
     level: int = node.level or 0
 
     if level > 0:
-        # Relative import
         module_name: str | None = node.module  # e.g. "utils" or None
 
-        # Candidates for the referenced package/module itself.
         pkg_candidates = _relative_import_candidates(module_name, level, file_path)
         if pkg_candidates is None:
             return [], True
         candidates.extend(pkg_candidates)
 
-        # Each imported name could be a submodule regardless of whether a
-        # dotted `module_name` was given.
-        #
-        # `from . import utils`        → module_name=None  → anchor = pkg dir
-        # `from .utils import submod`  → module_name="utils" → anchor = utils
-        #
-        # In both cases `alias.name` may refer to a file under the anchor dir.
         if module_name:
-            # anchor is the resolved pkg dir (strip ".py" from the first candidate)
             anchor_base: str | None = pkg_candidates[0].removesuffix(".py")
         else:
             anchor_candidates = _relative_import_candidates(None, level, file_path)
@@ -199,7 +181,6 @@ def _candidates_for_node(
                 candidates.append(f"{sub}.py")
                 candidates.append(f"{sub}/__init__.py")
     else:
-        # Absolute import: `from pkg.mod import name`
         if not node.module:
             return [], False
 
@@ -207,10 +188,8 @@ def _candidates_for_node(
         if mod_parts[0] in _STDLIB_TOP_LEVEL:
             return [], False
 
-        # Candidates for the `from` module itself.
         candidates.extend(_module_parts_to_candidates(mod_parts, source_roots))
 
-        # Each imported name could be a submodule.
         for alias in node.names:
             if alias.name == "*":
                 continue
@@ -257,8 +236,6 @@ def resolve_import_candidates(
         tree = ast.parse(source_code, filename=file_path)
     except SyntaxError as exc:
         logger.debug("SyntaxError parsing %s for import extraction: %s", file_path, exc)
-        # Treat an unparseable file as one unresolvable import statement so
-        # callers see a non-zero count and can log the failure correctly.
         return set(), 1
 
     all_candidates: set[str] = set()

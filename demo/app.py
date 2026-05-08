@@ -1,26 +1,3 @@
-"""Streamlit entrypoint for the Automated Pull Request Reviewer demo.
-
-Run with::
-
-    streamlit run demo/app.py
-
-Flow:
-
-1. On startup, eagerly load the local Qwen3 reviewer model
-   (cached via :func:`streamlit.cache_resource`, so it runs once per session).
-2. Render the PR URL input only after the model is ready.
-3. On "Analyze PR":
-   * Parse the GitHub PR URL.
-   * Fetch PR metadata and changed files via the GitHub REST API.
-   * Reuse :class:`ai_code_reviewer.models.pipeline.ReviewPipeline` to build
-     the model context (same prompt template used by the rest of the project).
-   * Run inference with the already-loaded :class:`ReviewModel`.
-   * Render the structured review output in a GitHub-like UI.
-
-This entrypoint contains no mock fallback path; every analysis call uses
-the real local model.
-"""
-
 from __future__ import annotations
 
 import os
@@ -83,11 +60,6 @@ def _select_initial_file(files: tp.Sequence[tp.Mapping[str, tp.Any]]) -> int:
 
 
 def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
-    """Load the local reviewer model eagerly.
-
-    Returns the ``model_info`` dict on success, or ``None`` on failure
-    (in which case an error has already been rendered to the UI).
-    """
     cached_info = st.session_state.get("model_info")
     if cached_info and cached_info.get("loaded"):
         return cached_info
@@ -187,7 +159,7 @@ def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
 
 def main() -> None:
     st.set_page_config(
-        page_title="APR — Automated Pull Request Reviewer",
+        page_title="APR - Automated Pull Request Reviewer",
         page_icon="\U0001F50D",  # magnifying glass
         layout="wide",
         initial_sidebar_state="expanded",

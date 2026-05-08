@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def path_content_dict_to_rows(
     d: Mapping[str, str] | dict[str, str] | None,
 ) -> list[dict[str, str]]:
-    """Convert a path→text map to sorted list rows ``{path, content}``.
+    """Convert a path-to-text map to sorted list rows ``{path, content}``.
 
     Used only for nested columns ``outgoing_dependencies``, ``incoming_dependencies``,
     and ``metadata_files``. The main reviewed file per row still uses the top-level
@@ -39,7 +39,7 @@ def _normalize_patched_content(text: str) -> str:
 
 
 def _as_path_content_dict(raw: Any) -> dict[str, str]:
-    """Coerce enrichment path→text values to a plain string dict.
+    """Coerce enrichment path-to-text values to a plain string dict.
 
     Args:
         raw:

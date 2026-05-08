@@ -53,15 +53,15 @@ Classify each comment into exactly one category.
 
 Categories
 ----------
-- blocking_issue  — correctness bugs, security vulnerabilities, data-loss risks, crashes, race conditions
-- style           — formatting, naming conventions, import ordering, whitespace
-- performance     — efficiency concerns, unnecessary allocations, algorithmic complexity
-- best_practice   — design patterns, idiomatic code, architectural suggestions, error-handling improvements
-- documentation   — missing / incorrect docstrings, comments, type hints
-- question        — reviewer asking for clarification or explanation
-- nitpick         — minor optional observations that don't affect correctness or style
-- praise          — positive feedback, approval, compliments
-- other           — does not fit any category above
+- blocking_issue: correctness bugs, security vulnerabilities, data-loss risks, crashes, race conditions
+- style: formatting, naming conventions, import ordering, whitespace
+- performance: efficiency concerns, unnecessary allocations, algorithmic complexity
+- best_practice: design patterns, idiomatic code, architectural suggestions, error-handling improvements
+- documentation: missing / incorrect docstrings, comments, type hints
+- question: reviewer asking for clarification or explanation
+- nitpick: minor optional observations that don't affect correctness or style
+- praise: positive feedback, approval, compliments
+- other: does not fit any category above
 
 Context
 =======

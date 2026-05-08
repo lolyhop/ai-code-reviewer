@@ -131,11 +131,11 @@ def summarize_metadata_files(
     """Heuristic compression of repository metadata files.
 
     Sections are added by priority until *max_total_chars* is reached:
-      1. README — truncated to first ~400 chars.
-      2. CONTRIBUTING — truncated to first ~400 chars.
-      3. Dependency files (requirements.txt, pyproject.toml, etc.) — kept as-is.
-      4. setup.py — extract name/version/install_requires.
-      5. Everything else — skipped.
+      1. README: truncated to first ~400 chars.
+      2. CONTRIBUTING: truncated to first ~400 chars.
+      3. Dependency files (requirements.txt, pyproject.toml, etc.): kept as-is.
+      4. setup.py: extract name/version/install_requires.
+      5. Everything else: skipped.
     """
     readme_files: tp.List[tp.Tuple[str, str]] = []
     contributing_files: tp.List[tp.Tuple[str, str]] = []

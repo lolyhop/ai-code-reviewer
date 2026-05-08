@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def make_dataset() -> MutableMapping[str, Any]:
-    """Return an empty nested dataset structure (repo → PR → commits → paths → comments).
+    """Return an empty nested dataset structure.
 
     Returns:
         A four-level `defaultdict` tree whose leaves are `{"comments": []}`
