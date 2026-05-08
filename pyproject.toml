@@ -32,6 +32,9 @@ finetune = [
     "torch>=2.1.0",
     "transformers>=4.40.0",
 ]
+demo = [
+    "streamlit>=1.35.0",
+]
 dev = [
     "mypy>=1.19.0",
     "nbdime>=4.0.0",

@@ -8,12 +8,12 @@ class ModelConfig:
     torch_dtype: str = "bfloat16"
     trust_remote_code: bool = True
     load_in_4bit: bool = False
-    max_input_length: int = 16384
+    max_input_length: int = 4096
 
 
 @dataclass
 class GenerationConfig:
-    max_new_tokens: int = 512
+    max_new_tokens: int = 1024
     temperature: float = 0.3
     top_p: float = 1.0
     do_sample: bool = False
