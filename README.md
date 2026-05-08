@@ -15,7 +15,6 @@ The project is built around one constraint: proprietary code should not be sent 
 
 - [How it works](#how-it-works)
 - [Repository map](#repository-map)
-- [Key files](#key-files)
 - [Notebooks](#notebooks)
 - [Model and data artifacts](#model-and-data-artifacts)
 - [Documents and reports](#documents-and-reports)
@@ -66,23 +65,6 @@ An empty `issues` list means no blocking issue was detected.
 ├── requirements.txt              Pinned environment used in experiments
 └── README.md
 ```
-
-## Key files
-
-| Area | File | What to look for |
-|---|---|---|
-| Demo entrypoint | [`demo/app.py`](demo/app.py) | Streamlit UI, eager model loading, PR URL flow |
-| Demo adapter | [`demo/adapters.py`](demo/adapters.py) | Live GitHub fetch, sample construction, inference backend dispatch |
-| Prompt pipeline | [`src/ai_code_reviewer/models/pipeline.py`](src/ai_code_reviewer/models/pipeline.py) | Converts dataset rows into review prompts |
-| Prompt template | [`src/ai_code_reviewer/models/prompts.py`](src/ai_code_reviewer/models/prompts.py) | Reviewer instruction and required JSON schema |
-| Model inference | [`src/ai_code_reviewer/models/inference.py`](src/ai_code_reviewer/models/inference.py) | Transformers wrapper and output parsing |
-| Data schema | [`src/ai_code_reviewer/models/schema.py`](src/ai_code_reviewer/models/schema.py) | `ReviewSample`, `PredictedIssue`, `ReviewPrediction` |
-| Patch handling | [`src/ai_code_reviewer/dataset/patches.py`](src/ai_code_reviewer/dataset/patches.py) | Applies unified diffs and maps line ranges |
-| Dataset enrichment | [`src/ai_code_reviewer/dataset/github_api.py`](src/ai_code_reviewer/dataset/github_api.py) | GitHub API enrichment, dependency extraction, file trees |
-| Import resolution | [`src/ai_code_reviewer/dataset/import_resolution.py`](src/ai_code_reviewer/dataset/import_resolution.py) | Resolves in-repo Python imports |
-| Data cleaning | [`src/ai_code_reviewer/data_processing/data_cleaning.py`](src/ai_code_reviewer/data_processing/data_cleaning.py) | Context compression and LLM-as-judge prompt building |
-| Fine-tuning | [`src/ai_code_reviewer/finetuning/train.py`](src/ai_code_reviewer/finetuning/train.py) | HuggingFace Trainer setup for SFT |
-| Evaluation | [`src/evaluation/metrics.py`](src/evaluation/metrics.py) | Precision/recall/F1, line IoU, BERTScore |
 
 ## Notebooks
 
