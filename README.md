@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-<a href="TODO_FINAL_REPORT_PDF_URL"><b>Final CRISP-DM Report</b></a> | <a href="TODO_PRESENTATION_SLIDES_URL"><b>Presentation Slides</b></a> | <a href="https://drive.google.com/file/d/1j87JaL00Pqbw8Ta7AHvyHwHbg9NWEOVi/view?usp=sharing"><b>Video Presentation</b></a>
+<a href="https://drive.google.com/file/d/1zp6uyxn5C1nC5Nubjpu1w9VkYAX7ErXa/view?usp=share_link"><b>Final CRISP-DM Report</b></a> | <a href="https://drive.google.com/file/d/1ycJ1BDNJnd2rfX3xt63NaSmZN8K3wzoe/view?usp=sharing"><b>Presentation Slides</b></a> | <a href="https://drive.google.com/file/d/1j87JaL00Pqbw8Ta7AHvyHwHbg9NWEOVi/view?usp=sharing"><b>Video Presentation</b></a>
 </p>
 
 
@@ -17,6 +17,7 @@ The project is built around one constraint: proprietary code should not be sent 
 - [Repository map](#repository-map)
 - [Key files](#key-files)
 - [Notebooks](#notebooks)
+- [Model and data artifacts](#model-and-data-artifacts)
 - [Documents and reports](#documents-and-reports)
 - [Run the demo](#run-the-demo)
 - [Common commands](#common-commands)
@@ -97,6 +98,15 @@ phase by phase without reading the full package code first.
 | [`notebooks/04_data_preparation.ipynb`](notebooks/04_data_preparation.ipynb) | Construct model-ready rows, labels, prompts, targets, and train/validation/test splits. |
 | [`notebooks/05_baseline_evaluation.ipynb`](notebooks/05_baseline_evaluation.ipynb) | Run baseline inference and inspect detection, localization, and comment-quality metrics. |
 | [`notebooks/06_finetuning_and_evaluation.ipynb`](notebooks/06_finetuning_and_evaluation.ipynb) | Fine-tune the reviewer model and compare it against the baseline. |
+
+## Model and data artifacts
+
+Large training artifacts are stored outside the repository.
+
+| Artifact | Contents |
+|---|---|
+| [`data.tar.gz`](https://drive.google.com/file/d/10jvyFar2j0zCC45mLif8y8aDAUayKV_V/view?usp=sharing) | Training splits: `train.jsonl`, `val.jsonl`, `test.jsonl` |
+| [`weights.tar.gz`](https://drive.google.com/file/d/10jvyFar2j0zCC45mLif8y8aDAUayKV_X/view?usp=sharing) | Fine-tuned reviewer model weights |
 
 ## Documents and reports
 
