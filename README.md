@@ -88,7 +88,7 @@ Large training artifacts are stored outside the repository.
 | Artifact | Contents |
 |---|---|
 | [`data.tar.gz`](https://drive.google.com/file/d/10jvyFar2j0zCC45mLif8y8aDAUayKV_V/view?usp=sharing) | Training splits: `train.jsonl`, `val.jsonl`, `test.jsonl` |
-| [`weights.tar.gz`](https://drive.google.com/file/d/10jvyFar2j0zCC45mLif8y8aDAUayKV_X/view?usp=sharing) | Fine-tuned reviewer model weights |
+| [`Qwen3_1.7B_FFT.tar.gz`](https://disk.yandex.ru/d/ZQ3A_aw-gcWDOA) | Fine-tuned Qwen3 1.7B reviewer model weights |
 
 ## Documents and reports
 
