@@ -39,8 +39,8 @@ ZIPBALL_MAX_BYTES: int = 50 * 1024 * 1024
 # The empty string represents the repository root itself; "src" covers the
 # common `src/` layout used by setuptools/poetry projects.  Both
 # `import_resolution.resolve_import_candidates` (forward direction: import
-# statement → candidate paths) and `github_api._incoming_import_target_variants`
-# (inverse direction: changed file path → expected import candidates) use this
+# statement to candidate paths) and `github_api._incoming_import_target_variants`
+# (inverse direction: changed file path to expected import candidates) use this
 # as their single source of truth.
 IMPORT_SOURCE_ROOTS: tuple[str, ...] = ("", "src")
 
@@ -51,7 +51,7 @@ INCOMING_DEP_MIN_SYMBOL_LENGTH: int = 3
 # Maximum number of symbols (function/class/method names) collected per changed
 # file for incoming-dependency search.  When a file has more qualifying symbols
 # the longest names are kept (more specific identifiers produce fewer false
-# positives).  Every changed file always participates — only its symbol set is
+# positives).  Every changed file always participates; only its symbol set is
 # trimmed, never the file itself.
 INCOMING_DEP_MAX_SYMBOLS_PER_FILE: int = 30
 

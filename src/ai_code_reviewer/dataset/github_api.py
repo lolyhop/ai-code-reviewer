@@ -34,8 +34,8 @@ def _incoming_import_target_variants(
     The import resolver generates candidates in both the plain-module form
     (`pkg/mod.py`) and the package-init form (`pkg/mod/__init__.py`), and
     duplicates each under every configured source root.  This function produces
-    the *inverse* set — the paths that would be generated for the import
-    statement `import pkg.mod` — so that we can intersect it against the
+    the inverse set: the paths that would be generated for the import
+    statement `import pkg.mod`, so that we can intersect it against the
     resolver output for a candidate file and confirm a real import link exists.
 
     Args:
@@ -61,15 +61,12 @@ def _incoming_import_target_variants(
     if norm is None:
         return frozenset()
 
-    # Build the direct path and its module↔package counterpart.
     base_pair: list[str] = [norm]
     if norm.endswith("/__init__.py"):
         base_pair.append(norm.removesuffix("/__init__.py") + ".py")
     elif norm.endswith(".py"):
         base_pair.append(norm.removesuffix(".py") + "/__init__.py")
 
-    # Cross-apply source-root prefixes: strip known roots (repo-root form) and
-    # add them (src-layout form) so both sides of the layout are covered.
     variants: set[str] = set(base_pair)
     for p in base_pair:
         for root in non_empty_roots:
@@ -323,7 +320,7 @@ def _scan_metadata_in_zip_bytes(
     """Scan a GitHub zipball and extract all files whose basename is in `metadata_names`.
 
     Unlike :func:`_extract_files_from_zip_bytes`, this function does not require
-    knowing the paths in advance — it scans the full zip manifest and collects any
+    knowing the paths in advance. It scans the full zip manifest and collects any
     entry whose final path segment matches a requested metadata filename.
 
     Args:
@@ -454,7 +451,7 @@ def _scan_symbol_usages_in_zip_bytes(
 def _infer_source_roots_from_zip_manifest(zip_bytes: bytes) -> tuple[str, ...]:
     """Infer Python source-root prefixes from the file-name manifest of a zipball.
 
-    Reads only :meth:`zipfile.ZipFile.infolist` — no file content is decoded —
+    Reads only :meth:`zipfile.ZipFile.infolist`; no file content is decoded,
     so the operation is fast even for large archives.
 
     A top-level directory is considered a source root when it satisfies both:
@@ -497,12 +494,12 @@ def _infer_source_roots_from_zip_manifest(zip_bytes: bytes) -> tuple[str, ...]:
                 parts = repo_rel.split("/")
                 if parts[-1] != "__init__.py":
                     continue
-                depth = len(parts)  # e.g. ["src", "pkg", "__init__.py"] → 3
+                depth = len(parts)  # e.g. ["src", "pkg", "__init__.py"] -> 3
                 if depth == 2:
-                    # top_dir/__init__.py → top_dir is a package, not a source root
+                    # top_dir/__init__.py means top_dir is a package.
                     top_package_dirs.add(parts[0])
                 elif depth >= 3:
-                    # top_dir/pkg/__init__.py → top_dir contains a package
+                    # top_dir/pkg/__init__.py means top_dir may be a source root.
                     top_dirs_with_packages.add(parts[0])
             roots |= top_dirs_with_packages - top_package_dirs
     except zipfile.BadZipFile as exc:
@@ -514,7 +511,7 @@ def _build_reexport_map(
     init_content_map: dict[str, str],
     source_roots: tuple[str, ...],
 ) -> dict[str, frozenset[str]]:
-    """Build a map from sub-module candidate path → `__init__.py` files that import it.
+    """Build a map from sub-module candidate path to importing `__init__.py` files.
 
     When a package's `__init__.py` re-exports a symbol from a sub-module
     (e.g. `from .mod import Foo`), callers that write `from pkg import Foo`
@@ -523,7 +520,7 @@ def _build_reexport_map(
 
     Args:
         init_content_map:
-            Mapping of repo-relative `__init__.py` path → file content,
+            Mapping of repo-relative `__init__.py` path to file content,
             as extracted from the snapshot zipball for the changed file's
             enclosing packages.
         source_roots:
@@ -859,7 +856,7 @@ async def fetch_compare_patches(
     maybe_truncated = len(files) == 300
     if maybe_truncated:
         logger.warning(
-            "Compare returned 300 files for %s/%s %s...%s — JSON file list may be truncated.",
+            "Compare returned 300 files for %s/%s %s...%s; JSON file list may be truncated.",
             owner,
             repo,
             base_commit[:7],
@@ -969,11 +966,11 @@ def _augment_snapshot_with_no_comment_files(
 
     Args:
         path_map:
-            Mapping of normalized path → file entry for one snapshot commit.  Mutated
+            Mapping of normalized path to file entry for one snapshot commit.  Mutated
             in place.
         cmap:
             Compare result for the same `(pr_number, snapshot_commit)`: normalized
-            path → `{"patch", "status", "filename", "previous_filename"}`.
+            path to `{"patch", "status", "filename", "previous_filename"}`.
         rng:
             Seeded :class:`random.Random` instance shared across all snapshots in a
             repo enrichment call so the seed is applied consistently.

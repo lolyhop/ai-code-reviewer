@@ -262,8 +262,3 @@ if __name__ == "__main__":
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
             pd.DataFrame(csv_rows).to_csv(out_path, index=False)
             print(f"\nSaved {len(csv_rows)} rows to {out_path}")
-
-"""
-python -m src.ai_code_reviewer.models.pipeline \
-  --jsonl data/test.jsonl --infer --output-csv runs/test_predictions.csv
-"""

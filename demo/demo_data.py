@@ -1,12 +1,3 @@
-"""Fallback mock data for the demo.
-
-Used **only** when the user explicitly enables the "Use mock data" toggle in
-the UI, or when live GitHub access fails and the user opts into mock mode.
-
-The default UI path is real PR analysis (see ``demo.adapters``); mock data
-exists for offline rehearsals, screen recordings, and unit-style smoke tests.
-"""
-
 from __future__ import annotations
 
 import typing as tp
@@ -144,7 +135,7 @@ MOCK_CONTEXT: tp.Dict[str, tp.Any] = {
     "pr_title": MOCK_PR_META["pr_title"],
     "pr_body": MOCK_PR_META["pr_body"],
     "changed_file_context": (
-        "src/auth/tokens.py — token refresh utility (12 → 17 lines after patch)"
+        "src/auth/tokens.py - token refresh utility (12 to 17 lines after patch)"
     ),
     "imported_definitions": [
         "generate_new_token(user_id: str) -> str   [src/auth/utils.py:34]",
@@ -163,7 +154,6 @@ MOCK_CONTEXT: tp.Dict[str, tp.Any] = {
 
 
 def build_mock_pr_review() -> tp.Dict[str, tp.Any]:
-    """Return a mock ``PRReview``-shaped dict (same layout as adapters output)."""
     return {
         "meta": dict(MOCK_PR_META),
         "files": [dict(f) for f in MOCK_FILES],
