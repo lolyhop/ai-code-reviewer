@@ -1,10 +1,3 @@
-"""UI rendering helpers for the demo.
-
-All Streamlit-specific HTML and CSS lives here. ``demo/app.py`` orchestrates
-control flow and calls these helpers; this module never touches the GitHub
-API or the model.
-"""
-
 from __future__ import annotations
 
 import html
@@ -13,18 +6,10 @@ import typing as tp
 import streamlit as st
 
 
-# ---------------------------------------------------------------------------
-# CSS
-# ---------------------------------------------------------------------------
-
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* Apply the body font only at the top level. Streamlit's internal text
-   inherits naturally; targeting [class*="st-"] catches Streamlit's
-   emotion-cache classes and may break expander/accessibility layout in
-   newer versions. */
 html, body, .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
@@ -133,11 +118,6 @@ html, body, .stApp {
 """
 
 
-# ---------------------------------------------------------------------------
-# Header / banners
-# ---------------------------------------------------------------------------
-
-
 def render_header() -> None:
     st.markdown("# Automated Pull Request Reviewer")
     st.markdown(
@@ -188,11 +168,6 @@ def render_model_banner(model_info: tp.Mapping[str, tp.Any]) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
-
-
-# ---------------------------------------------------------------------------
-# Summary cards
-# ---------------------------------------------------------------------------
 
 
 def _card(label: str, value_html: str) -> str:
@@ -251,17 +226,11 @@ def render_summary_cards(
         )
 
 
-# ---------------------------------------------------------------------------
-# File sidebar
-# ---------------------------------------------------------------------------
-
-
 def render_file_sidebar(
     files: tp.Sequence[tp.Mapping[str, tp.Any]],
     selected_idx: int,
     state_key: str = "selected_file_idx",
 ) -> None:
-    """Render the changed-files sidebar. Updates ``st.session_state[state_key]``."""
     st.markdown("#### Changed files")
     for idx, f in enumerate(files):
         status = f.get("status", "skipped")
@@ -298,13 +267,7 @@ def render_file_sidebar(
                 st.rerun()
 
 
-# ---------------------------------------------------------------------------
-# Diff and review comment rendering
-# ---------------------------------------------------------------------------
-
-
 def render_diff(file_data: tp.Mapping[str, tp.Any]) -> str:
-    """Return GitHub-like diff HTML with optional issue-line highlighting."""
     issue_lines: tp.Set[int] = set()
     for iss in file_data.get("issues") or []:
         line_start = iss.get("line_start") or 0
@@ -433,11 +396,6 @@ def render_main_review_area(
         render_comment_action_buttons(iss, file_idx)
 
 
-# ---------------------------------------------------------------------------
-# Context expanders
-# ---------------------------------------------------------------------------
-
-
 def render_context_section(context: tp.Mapping[str, tp.Any]) -> None:
     st.markdown("### Context used by model")
     with st.expander("PR title and description"):
@@ -454,11 +412,6 @@ def render_context_section(context: tp.Mapping[str, tp.Any]) -> None:
             st.code(site, language="text")
     with st.expander("Repository metadata summary"):
         st.code(context.get("repo_metadata", "Not available"), language="text")
-
-
-# ---------------------------------------------------------------------------
-# Public surface
-# ---------------------------------------------------------------------------
 
 
 __all__ = [

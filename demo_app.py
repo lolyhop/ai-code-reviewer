@@ -1,14 +1,3 @@
-"""Compatibility shim for the legacy entrypoint.
-
-The demo lives under :mod:`demo` now; this file just forwards to
-:func:`demo.app.main` so existing `streamlit run demo_app.py` invocations
-keep working.
-
-Prefer:
-
-    streamlit run demo/app.py
-"""
-
 from __future__ import annotations
 
 import sys

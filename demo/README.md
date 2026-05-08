@@ -2,8 +2,7 @@
 
 Streamlit demo for the [Automated Pull Request Reviewer](../README.md) project.
 Pastes a GitHub PR URL, fetches the PR, builds the same review context used by
-the project pipeline, runs **local** Qwen3 inference, and renders a
-GitHub-like review.
+the project pipeline, runs reviewer inference, and renders a GitHub-like review.
 
 ## Quick start
 
@@ -29,24 +28,28 @@ and an error with install hints is shown instead.
 
 ## Backends
 
-The demo supports two inference backends, selected via `APR_BACKEND`:
+The demo supports three inference backends, selected via `APR_BACKEND`:
 
 | Backend | When to use | Setup |
 |---|---|---|
 | `transformers` (default) | NVIDIA GPU, full HF parity with the rest of the project | `pip install -e ".[finetune,demo]"` |
-| `ollama` | **Apple Silicon (M1/M2/M3)**, or any host without a CUDA GPU | `brew install ollama && ollama pull qwen2.5-coder:1.5b` |
+| `openai` / `vllm` | Model is served behind an OpenAI-compatible `/v1/chat/completions` API | Set `APR_OPENAI_BASE_URL` and `APR_OPENAI_MODEL` |
+| `ollama` | Local llama.cpp/Ollama setup | `brew install ollama && ollama pull qwen2.5-coder:1.5b` |
 
-Both backends use the **same `ReviewPipeline`** to build prompts and the
+All backends use the **same `ReviewPipeline`** to build prompts and the
 same JSON parser for outputs — only the generator changes.
 
-### Why Ollama on Apple Silicon
+### Quick start with an OpenAI-compatible API
 
-`transformers` + MPS (the only PyTorch GPU backend on Mac) is much slower
-than `llama.cpp` via Metal: bf16 ops fall back to CPU, no FlashAttention,
-and several Qwen kernels are not fused on MPS. Ollama wraps llama.cpp,
-runs natively on Metal, and is typically **5-10x faster** on the same
-M-series chip. Generation also uses Ollama's `format: "json"` mode, which
-forces valid JSON output and improves parse success on small models.
+Use this when the model is served by vLLM or an internal gateway that follows
+the OpenAI chat-completions shape.
+
+```bash
+APR_BACKEND=openai \
+APR_OPENAI_BASE_URL=http://localhost:8000/v1 \
+APR_OPENAI_MODEL=your-model-name \
+streamlit run demo/app.py
+```
 
 ### Quick start with Ollama
 
@@ -70,8 +73,8 @@ warm-up so the first real `Analyze PR` click is not stuck on cold-load.
 | Variable | Default | Notes |
 |---|---|---|
 | `GITHUB_TOKEN` | _unset_ | Needed for private PRs and for >60 req/h on public PRs. |
-| `APR_BACKEND` | `transformers` | One of `transformers`, `ollama`. |
-| `APR_MAX_NEW_TOKENS` | `512` | Generation budget per file (forwarded to both backends). |
+| `APR_BACKEND` | `transformers` | One of `transformers`, `openai`, `vllm`, `ollama`. |
+| `APR_MAX_NEW_TOKENS` | `512` | Generation budget per file. |
 
 ### Transformers backend (`APR_BACKEND=transformers`)
 
@@ -83,6 +86,15 @@ warm-up so the first real `Analyze PR` click is not stuck on cold-load.
 | `APR_MAX_INPUT_TOKENS` | `16384` | Truncation length for the prompt. |
 | `APR_LOAD_IN_4BIT` | `false` | Set to `1`/`true` for 4-bit quantized loading (requires `bitsandbytes`). |
 
+### OpenAI-compatible backend (`APR_BACKEND=openai` or `APR_BACKEND=vllm`)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `APR_OPENAI_BASE_URL` | `http://localhost:8000/v1` | Base URL of the OpenAI-compatible server. |
+| `APR_OPENAI_MODEL` | `APR_MODEL_NAME` or `Qwen/Qwen3-1.7B` | Model name sent in the chat-completions request. |
+| `APR_OPENAI_API_KEY` | _unset_ | Optional bearer token for gateways that require auth. |
+| `APR_OPENAI_TIMEOUT` | `180` | Request timeout in seconds. |
+
 ### Ollama backend (`APR_BACKEND=ollama`)
 
 | Variable | Default | Notes |
@@ -90,8 +102,9 @@ warm-up so the first real `Analyze PR` click is not stuck on cold-load.
 | `APR_OLLAMA_MODEL` | `qwen2.5-coder:1.5b` | Tag must already be pulled (`ollama pull <tag>`). |
 | `APR_OLLAMA_URL` | `http://localhost:11434` | Override only if you run Ollama on a different host/port. |
 
-Inference is fully local in both backends; no proprietary code or generated
-content is sent to external APIs.
+To preserve the project privacy boundary, point `openai` / `vllm` to a local
+or on-premise endpoint. Do not use a third-party hosted URL for proprietary
+code unless that is explicitly allowed by your environment.
 
 ## How it reuses the project pipeline
 
@@ -104,7 +117,7 @@ content is sent to external APIs.
 | Heuristic dependency retriever | `ai_code_reviewer.models.retriever.Retriever` (via the pipeline) |
 | Repo / PR metadata strings | `ai_code_reviewer.models.metadata.build_repository_metadata`, `build_pull_request_metadata` (via the pipeline) |
 | Prompt assembly | `ai_code_reviewer.models.pipeline.ReviewPipeline.run` |
-| Local Qwen3 inference | `ai_code_reviewer.models.inference.ReviewModel` |
+| Local Transformers inference | `ai_code_reviewer.models.inference.ReviewModel` |
 | JSON output parsing | `ai_code_reviewer.models.inference.ReviewModel._parse_response` (via `predict`) |
 
 The only logic added by the demo is:

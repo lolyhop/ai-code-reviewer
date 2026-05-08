@@ -459,7 +459,7 @@ def evaluate_predictions_dataframe(
 
     if ref_for_bert:
         logger.info(
-            "BERTScore: %d greedy IoU–matched (GT-centric) comment pairs...",
+            "BERTScore: %d greedy IoU-matched (GT-centric) comment pairs...",
             len(ref_for_bert),
         )
         bs = comment_evaluator.evaluate_to_dict(
@@ -475,7 +475,7 @@ def evaluate_predictions_dataframe(
         }
     else:
         report["bertscore"] = {}
-        report["bertscore_greedy_skipped"] = "no non-empty greedy IoU–matched pairs"
+        report["bertscore_greedy_skipped"] = "no non-empty greedy IoU-matched pairs"
         logger.info("Greedy IoU BERTScore skipped: no matched pairs.")
     return report
 

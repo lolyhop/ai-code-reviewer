@@ -1,26 +1,3 @@
-"""Streamlit entrypoint for the Automated Pull Request Reviewer demo.
-
-Run with::
-
-    streamlit run demo/app.py
-
-Flow:
-
-1. On startup, eagerly load the local Qwen3 reviewer model
-   (cached via :func:`streamlit.cache_resource`, so it runs once per session).
-2. Render the PR URL input only after the model is ready.
-3. On "Analyze PR":
-   * Parse the GitHub PR URL.
-   * Fetch PR metadata and changed files via the GitHub REST API.
-   * Reuse :class:`ai_code_reviewer.models.pipeline.ReviewPipeline` to build
-     the model context (same prompt template used by the rest of the project).
-   * Run inference with the already-loaded :class:`ReviewModel`.
-   * Render the structured review output in a GitHub-like UI.
-
-This entrypoint contains no mock fallback path; every analysis call uses
-the real local model.
-"""
-
 from __future__ import annotations
 
 import os
@@ -50,11 +27,6 @@ from demo.adapters import (  # noqa: E402
 
 
 DEMO_PR_PLACEHOLDER = "https://github.com/owner/repo/pull/123"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _result_from_pr_review(review: PRReview) -> tp.Dict[str, tp.Any]:
@@ -87,17 +59,7 @@ def _select_initial_file(files: tp.Sequence[tp.Mapping[str, tp.Any]]) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Model bootstrap
-# ---------------------------------------------------------------------------
-
-
 def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
-    """Load the local reviewer model eagerly.
-
-    Returns the ``model_info`` dict on success, or ``None`` on failure
-    (in which case an error has already been rendered to the UI).
-    """
     cached_info = st.session_state.get("model_info")
     if cached_info and cached_info.get("loaded"):
         return cached_info
@@ -105,6 +67,8 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
     backend = os.environ.get("APR_BACKEND", "transformers").strip().lower() or "transformers"
     if backend == "ollama":
         spinner_text = "Connecting to local Ollama server and warming up the model ..."
+    elif backend in {"openai", "openai-compatible", "vllm"}:
+        spinner_text = "Connecting to the OpenAI-compatible model endpoint ..."
     else:
         spinner_text = "Loading local reviewer model (first run downloads weights) ..."
 
@@ -123,6 +87,17 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
                     "```\n\n"
                     "Then reload this page.",
                 )
+            elif backend in {"openai", "openai-compatible", "vllm"}:
+                st.info(
+                    "Check that the model server is reachable and exposes "
+                    "`/v1/chat/completions`.\n\n"
+                    "Example:\n\n"
+                    "```\n"
+                    "APR_BACKEND=openai\n"
+                    "APR_OPENAI_BASE_URL=http://localhost:8000/v1\n"
+                    "APR_OPENAI_MODEL=your-model-name\n"
+                    "```",
+                )
             else:
                 st.info(
                     "Install the inference dependencies and reload the page:\n\n"
@@ -137,11 +112,6 @@ def _ensure_model_ready() -> tp.Optional[tp.Dict[str, tp.Any]]:
 
     st.session_state["model_info"] = info
     return info
-
-
-# ---------------------------------------------------------------------------
-# Analysis flow
-# ---------------------------------------------------------------------------
 
 
 def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
@@ -187,14 +157,9 @@ def _run_analysis(pr_url: str) -> tp.Optional[tp.Dict[str, tp.Any]]:
     return _result_from_pr_review(review)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     st.set_page_config(
-        page_title="APR — Automated Pull Request Reviewer",
+        page_title="APR - Automated Pull Request Reviewer",
         page_icon="\U0001F50D",  # magnifying glass
         layout="wide",
         initial_sidebar_state="expanded",

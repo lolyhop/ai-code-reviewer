@@ -481,7 +481,7 @@ class Checkpoint:
     def _save(self) -> None:
         with open(self.path, "w") as f:
             json.dump(self._data, f, ensure_ascii=False)
-        logger.info("Checkpoint: %d rows → %s", self._count, self.path)
+        logger.info("Checkpoint: %d rows -> %s", self._count, self.path)
 
 
 class DataCleaningPipeline:
@@ -714,10 +714,3 @@ if __name__ == "__main__":
     result.to_parquet(args.output, index=False)
     logger.info("Saved %d rows to %s", len(result), args.output)
     ckpt.finalize()
-
-"""
-python -m src.ai_code_reviewer.data_processing.data_cleaning dataset-4.parquet \
-  -o cleaned_2.parquet \
-  --checkpoint .cleaning_checkpoint_.json \
-  --checkpoint-every 500
-"""
