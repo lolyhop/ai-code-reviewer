@@ -52,7 +52,7 @@ The goal of the \textbf{Automated Pull Request Reviewer (APR)} is to act as a pr
 
 \subsection*{Success Criteria}
 
-Success is defined at two levels. The first level captures the intended business impact of APR on the pull request process:
+Success is defined at three levels. The first level captures the intended business impact of APR on the pull request process:
 
 \begin{table}[H]
 \centering
@@ -599,13 +599,13 @@ Overall, the result is \textbf{successful as an offline data mining prototype}. 
 This subsection reviews the CRISP-DM process that was followed and identifies which decisions were well supported and which parts should be strengthened in the next iteration.
 
 \textbf{1. Business Understanding.}
-BU prevented the project from being framed as a generic code-generation exercise and tied APR to a concrete operational problem with a clear precision-first priority. It also defined operational SLOs upfront in \cref{tab:operational_criteria}, which made the deployment targets verifiable rather than negotiable. The unresolved part of this stage is that several business KPIs (Time-to-Merge, First-Time Approval Rate, Change Failure Rate) are by construction not measurable until the system is integrated into a real review workflow.
+The Business Understanding phase prevented the project from being framed as a generic code-generation exercise and tied APR to a concrete operational problem with a clear precision-first priority. It also defined operational SLOs upfront in \cref{tab:operational_criteria}, which made the deployment targets verifiable rather than negotiable. The unresolved part of this stage is that several business KPIs (Time-to-Merge, First-Time Approval Rate, Change Failure Rate) are by construction not measurable until the system is integrated into a real review workflow.
 
 \textbf{2. Data Understanding.}
-DU converted modeling assumptions into measurable constraints rather than only describing the dataset: the right-tailed token distributions of repository trees and dependency files directly motivated the context-compression pipeline, and the dependency analysis showed that retaining the top-5 incoming and outgoing files preserves coverage for most examples while keeping prompt length manageable. The token-length estimation relied on the standard ``1 token $\approx$ 4 characters'' heuristic; using the actual Qwen tokenizer would have been more accurate for code, and this should be tightened in the next iteration.
+The Data Understanding phase converted modeling assumptions into measurable constraints rather than only describing the dataset: the right-tailed token distributions of repository trees and dependency files directly motivated the context-compression pipeline, and the dependency analysis showed that retaining the top-5 incoming and outgoing files preserves coverage for most examples while keeping prompt length manageable. The token-length estimation relied on the standard ``1 token $\approx$ 4 characters'' heuristic; using the actual Qwen tokenizer would have been more accurate for code, and this should be tightened in the next iteration.
 
 \textbf{3. Data Preparation.}
-DP was the most important bridge between raw GitHub data and the modeling setup. Filtering, GitHub API enrichment, and the context-compression pipeline produced a coherent JSONL training format with both prompts and structured JSON targets. The main weakness of this stage is label reliability: labels were constructed through an LLM-as-a-judge pipeline rather than full manual annotation, and the positive class consolidates \texttt{blocking\_issue}, \texttt{performance}, and a 50\% sample of \texttt{best\_practice}. This dilutes the strict definition of ``blocking'' used in the precision target and is the most likely source of borderline disagreements between labels and human reviewer intent. A future iteration should keep these categories separate and report per-category metrics.
+The Data Preparation phase was the most important bridge between raw GitHub data and the modeling setup. Filtering, GitHub API enrichment, and the context-compression pipeline produced a coherent JSONL training format with both prompts and structured JSON targets. The main weakness of this stage is label reliability: labels were constructed through an LLM-as-a-judge pipeline rather than full manual annotation, and the positive class consolidates \texttt{blocking\_issue}, \texttt{performance}, and a 50\% sample of \texttt{best\_practice}. This dilutes the strict definition of ``blocking'' used in the precision target and is the most likely source of borderline disagreements between labels and human reviewer intent. A future iteration should keep these categories separate and report per-category metrics.
 
 \textbf{4. Modeling.}
 The model was trained to produce a structured JSON response covering detection, line range, and comment text in a single inference call, which matches the intended product behavior. The comparison with the zero-shot baseline confirmed that fine-tuning was necessary: precision improved from \textbf{43.3\%} to \textbf{74.8\%}, recall from \textbf{18.6\%} to \textbf{55.0\%}, and IoU from \textbf{0.450} to \textbf{0.612}. The main weakness of this stage is that the headline numbers come from a single training seed and a single test split; a repeat of the project should report seeds variance and include at least one strong non-LLM baseline (for example a linter pipeline) to anchor the comparison.
@@ -658,7 +658,7 @@ The final project deliverable consists of the CRISP-DM report, the prepared data
 
 \subsection*{Review Project}
 
-This subsection reviews the project as a project -- scope, execution, and constraints -- rather than the data mining process, which is covered in Review Process.
+This subsection reviews the overall project execution -- scope, constraints, and deliverables -- rather than the data mining process itself, which is covered in Review Process.
 
 The project executed within its planned scope. The Python-only MVP boundary set in Business Understanding held through every subsequent phase, which kept the deliverables tractable for a five-person team within the available timeline. All four CRISP-DM-aligned deliverables (labeled dataset, fine-tuned checkpoint, evaluation report with both ML and operational success criteria, and MVP inference pipeline) were completed.
 
@@ -667,5 +667,135 @@ Several external constraints shaped the result. The most significant was data ac
 If the project were repeated, three setup-level changes would be highest priority. First, secure a partnership with at least one private repository owner before the data collection phase, so distribution shift can be measured rather than only acknowledged. Second, allocate a small annotation budget for human verification of borderline labels (especially the \texttt{best\_practice} / \texttt{blocking\_issue} boundary) rather than relying entirely on the LLM judge. Third, plan the customer-side VCS integration from the beginning, so the A/B experiment can run inside the same project iteration rather than being deferred to a follow-up.
 
 Overall, the project should be considered a successful offline prototype rather than a finished production system. The next project iteration should focus on MVP deployment under the conditions defined in Plan Deployment, an A/B experiment in a real review workflow, and the label-quality and distribution-validation improvements identified in Determine Next Steps.
+
+
+\section*{Team Contributions}
+
+\begin{table}[H]
+\centering
+\caption{Team member contributions by project task. Percentages indicate individual share of effort; hours are average per person.}
+\label{tab:contributions}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lp{5.8cm}cccccp{4.5cm}c@{}}
+\toprule
+\textbf{Task} & \textbf{Description} &
+\rotatebox{75}{\textbf{E.\,Chernobrovkin}} &
+\rotatebox{75}{\textbf{N.\,Tiurkov}} &
+\rotatebox{75}{\textbf{N.\,Adagamov}} &
+\rotatebox{75}{\textbf{I.\,Ershov}} &
+\rotatebox{75}{\textbf{R.\,Gatiatullin}} &
+\textbf{Key Deliverables} &
+\rotatebox{75}{\textbf{Avg.\ Hours}} \\
+\midrule
+
+Business Understanding &
+Problem scope, stakeholders, success criteria, cost-benefit analysis &
+20\% & 5\% & 30\% & 5\% & 40\% &
+Business KPIs (Table~\ref{tab:business_criteria}); ML targets (Table~\ref{tab:ml_criteria}); operational SLOs (Table~\ref{tab:operational_criteria}); project plan (Table~\ref{tab:project_plan}) &
+4 \\
+\midrule
+
+Data Collection &
+GH Archive fetch; GitHub API enrichment; patch reconstruction; Parquet export &
+0\% & 60\% & 30\% & 10\% & 0\% &
+\texttt{dataset.parquet} — schema in Table~\ref{tab:schema} (1,404 PRs, 6,597 files) &
+6 \\
+\midrule
+
+Data Understanding &
+Comment distribution, token-length and dependency coverage analysis &
+0\% & 50\% & 50\% & 0\% & 0\% &
+Token-length percentiles (Table~\ref{tab:token_lengths}); dependency stats (Table~\ref{tab:dep_stats}) &
+4 \\
+\midrule
+
+Data Preparation &
+Context compression; LLM-as-judge annotation; label construction; train/val/test splits &
+10\% & 30\% & 0\% & 30\% & 30\% &
+Cleaning filters (Table~\ref{tab:data_cleaning}); taxonomy (Table~\ref{tab:taxonomy}); splits (Table~\ref{tab:model_split}) &
+5 \\
+\midrule
+
+Zero-Shot Baseline &
+Qwen3-1.7B zero-shot inference with prompt engineering &
+20\% & 0\% & 0\% & 60\% & 20\% &
+Baseline column of Table~\ref{tab:model_results} (P\,43.3\%, R\,18.6\%, IoU\,0.450) &
+5 \\
+\midrule
+
+Model Fine-Tuning &
+Supervised fine-tuning with loss masking; checkpoint selection &
+20\% & 0\% & 0\% & 60\% & 20\% &
+Model selection (Table~\ref{tab:model_selection}); config (Table~\ref{tab:finetune_config}); fine-tuned checkpoint &
+6 \\
+\midrule
+
+Evaluation &
+Precision, recall, F1, IoU, BERTScore; SLO verification; error analysis &
+30\% & 30\% & 0\% & 20\% & 20\% &
+Full results in Table~\ref{tab:model_results}; error analysis in text &
+4 \\
+\midrule
+
+Deployment \& Demo &
+FastAPI/vLLM inference service; Streamlit demo UI &
+50\% & 10\% & 20\% & 10\% & 10\% &
+Streamlit demo (GitHub PR URL input); FastAPI/vLLM service &
+4 \\
+\midrule
+
+Report Writing &
+CRISP-DM documentation &
+90\% & 0\% & 10\% & 0\% & 0\% &
+This report (\texttt{docs/reports/report.tex}) &
+5 \\
+\midrule
+
+Task Presentation &
+Final project presentation slides &
+55\% & 25\% & 10\% & 0\% & 10\% &
+Project slides (PDF) &
+4 \\
+
+\bottomrule
+\end{tabular}}
+\end{table}
+\begin{table}[H]
+\centering
+\caption{Group roles and overall contribution by member.}
+\label{tab:group_roles}
+\begin{tabular}{@{}p{3.2cm}p{6.4cm}p{3.2cm}c@{}}
+\toprule
+\textbf{Group Member} & \textbf{Assigned Role(s)} & \textbf{Main Responsibility} & \textbf{Contribution} \\ \midrule
+
+E.\ Chernobrovkin &
+Project Manager (0.7); ML Engineer (0.3) &
+Report coordination, modeling support, and final integration &
+20\% \\ \midrule
+
+N.\ Tiurkov &
+Data Scientist (0.7); Project Manager (0.3) &
+Data collection, EDA, dependency analysis, and planning support &
+20\% \\ \midrule
+
+N.\ Adagamov &
+Business Analyst (0.6); Data Scientist (0.3) &
+Business interpretation, dataset description, and analysis support &
+20\% \\ \midrule
+
+I.\ Ershov &
+ML Engineer (0.3); Business Unit (1.0) &
+Fine-tuning, baseline implementation, and technical feasibility framing &
+20\% \\ \midrule
+
+R.\ Gatiatullin &
+ML Engineer (0.4); Business Analyst (0.4) &
+Business criteria, model support, and final recommendations &
+20\% \\ \bottomrule
+
+\end{tabular}
+\end{table}
 
 \end{document}
